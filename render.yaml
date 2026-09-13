@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: omniflow-app
+    runtime: node
+    plan: free
+    buildCommand: npm install --legacy-peer-deps && npm run build
+    startCommand: npm start
+    envVars:
+      - key: AI_API_KEY
+        sync: false
+      - key: AI_API_BASE_URL
+        value: https://api.deepseek.com
+      - key: AI_MODEL
+        value: deepseek-chat
+      - key: VITE_SUBSCRIPTION_TIER
+        value: FREE
