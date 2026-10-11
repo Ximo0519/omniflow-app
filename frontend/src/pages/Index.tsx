@@ -3,7 +3,6 @@ import { Toaster } from '@/components/ui/sonner';
 import { toast } from 'sonner';
 import Navbar from '@/components/custom/Navbar';
 import Footer from '@/components/custom/Footer';
-import OmniflowBadge from '@/components/custom/OmniflowBadge';
 import Home from './Home';
 import History from './History';
 import { MusicTrack } from '@shared/types/api';
@@ -75,7 +74,6 @@ const Index = () => {
         )}
       </main>
       <Footer />
-      <OmniflowBadge />
       <Toaster />
     </div>
   );

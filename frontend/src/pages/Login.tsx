@@ -38,7 +38,7 @@ export default function Login() {
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
             </svg>
           </div>
-          <h1 className="text-3xl font-bold text-[#F8FAFC]">AI音创工坊</h1>
+          <h1 className="text-3xl font-bold text-[#F8FAFC]">AImusicgenerate</h1>
           <p className="text-[#94A3B8] mt-2">登录后开始创作</p>
         </div>
 

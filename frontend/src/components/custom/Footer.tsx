@@ -10,7 +10,7 @@ export default function Footer() {
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
                 </svg>
               </div>
-              <span className="font-bold text-[#F8FAFC]">AI音创工坊</span>
+              <span className="font-bold text-[#F8FAFC]">AImusicgenerate</span>
             </div>
             <p className="text-[#94A3B8] text-sm max-w-xs">
               基于先进生成式 AI 技术的音乐创作平台，让每个人都能成为作曲家。
@@ -34,7 +34,7 @@ export default function Footer() {
           </div>
         </div>
         <div className="pt-8 flex flex-col md:flex-row justify-between items-center gap-4 text-xs text-[#94A3B8]" style={{ borderTop: '1px solid #334155' }}>
-          <p>© 2026 AI音创工坊. All rights reserved.</p>
+          <p>© 2026 AImusicgenerate. All rights reserved.</p>
           <div className="flex gap-6">
             <a href="#" className="hover:text-[#F8FAFC] transition-colors" data-omniflow-feature-status="unbuilt">隐私政策</a>
             <a href="#" className="hover:text-[#F8FAFC] transition-colors" data-omniflow-feature-status="unbuilt">服务条款</a>
