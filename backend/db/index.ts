@@ -12,9 +12,10 @@ if (!connectionString) {
 
 // postgres.js 是惰性连接：无请求不会真正拨号。
 // 未配置 DATABASE_URL 时用占位 DSN，保证模块导入不崩溃（所有路由在查询前都会检查 isDbConfigured）。
+// Neon 免费版自动休眠，首次连接需要唤醒，connect_timeout 需要足够长
 const queryClient = postgres(
   connectionString || 'postgres://placeholder:placeholder@127.0.0.1:5432/placeholder',
-  { prepare: false, max: 5, connect_timeout: 10 }
+  { prepare: false, max: 5, connect_timeout: 30, idle_timeout: 20 }
 );
 
 export const db = drizzle(queryClient, { schema });
