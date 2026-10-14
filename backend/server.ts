@@ -6,6 +6,9 @@ import path from 'path';
 
 //import api routes here
 import aiRoutes from './routes/ai';
+import authRoutes from './routes/auth';
+import musicRoutes from './routes/music';
+import plazaRoutes from './routes/plaza';
 
 // Configuration
 import { SERVER_CONFIG } from './config/constants';
@@ -67,8 +70,11 @@ app.use(
 /**
  * API Routes
  */
-app.use(express.json());
+app.use(express.json({ limit: '2mb' }));
 app.use('/api/ai', aiRoutes);
+app.use('/api/auth', authRoutes);
+app.use('/api/music', musicRoutes);
+app.use('/api/plaza', plazaRoutes);
 
 /**
  * Install Stripe Routes here

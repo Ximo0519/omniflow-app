@@ -6,11 +6,37 @@ services:
     buildCommand: npm install --legacy-peer-deps && npm run build
     startCommand: npm start
     envVars:
+      # 数据库（Neon PostgreSQL）
+      - key: DATABASE_URL
+        sync: false
+      # JWT
+      - key: JWT_SECRET
+        sync: false
+      # DeepSeek 提示词润色
       - key: AI_API_KEY
         sync: false
       - key: AI_API_BASE_URL
         value: https://api.deepseek.com
       - key: AI_MODEL
         value: deepseek-chat
-      - key: VITE_SUBSCRIPTION_TIER
-        value: FREE
+      # Suno 音乐生成
+      - key: SUNO_API_KEY
+        sync: false
+      - key: SUNO_API_BASE_URL
+        value: https://api.sunoapi.org
+      - key: SUNO_MODEL
+        value: V4
+      # Cloudflare R2 音频存储
+      - key: R2_ACCOUNT_ID
+        sync: false
+      - key: R2_ACCESS_KEY_ID
+        sync: false
+      - key: R2_SECRET_ACCESS_KEY
+        sync: false
+      - key: R2_BUCKET_NAME
+        sync: false
+      - key: R2_PUBLIC_URL
+        sync: false
+      # 业务配置
+      - key: DAILY_QUOTA
+        value: "10"

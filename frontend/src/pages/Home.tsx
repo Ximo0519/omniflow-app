@@ -1,8 +1,10 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { toast } from 'sonner';
 import AudioPlayer from '@/components/custom/AudioPlayer';
+import CoverArt from '@/components/custom/CoverArt';
 import { MusicTrack } from '@shared/types/api';
-import { API_BASE_URL } from '@/config/constants';
+import { musicApi, aiApi, plazaApi } from '@/lib/api';
+import { useAuth } from '@/contexts/AuthContext';
 
 const STYLES = [
   { id: 'pop', label: '流行' },
@@ -15,30 +17,117 @@ const STYLES = [
 const MOODS = [
   { value: 'happy', label: '欢快' },
   { value: 'calm', label: '平静' },
-  { value: 'sad', label: '戒伤' },
+  { value: 'sad', label: '悲伤' },
   { value: 'energetic', label: '激昂' },
 ];
 
-const DURATIONS = [
-  { value: 30, label: '30 秒' },
-  { value: 60, label: '60 秒' },
-  { value: 90, label: '90 秒' },
-];
+/** 轮询间隔（毫秒） */
+const POLL_INTERVAL = 4000;
+/** 最大轮询时长 6 分钟 */
+const POLL_TIMEOUT = 6 * 60 * 1000;
 
 interface HomeProps {
-  history: MusicTrack[];
-  onGenerated: (track: MusicTrack) => void;
-  quotaRemaining: number;
+  onNavigate?: (path: string) => void;
 }
 
-export default function Home({ history, onGenerated, quotaRemaining }: HomeProps) {
+export default function Home({ onNavigate }: HomeProps) {
+  const { user, refreshUser } = useAuth();
+  const quotaRemaining = user?.quotaRemaining ?? 0;
+
   const [prompt, setPrompt] = useState('');
   const [selectedStyle, setSelectedStyle] = useState('pop');
-  const [duration, setDuration] = useState(60);
   const [mood, setMood] = useState('calm');
+  const [withVocal, setWithVocal] = useState(false);
+
   const [generating, setGenerating] = useState(false);
-  const [currentTrack, setCurrentTrack] = useState<MusicTrack | null>(null);
   const [progress, setProgress] = useState(0);
+  const [phase, setPhase] = useState('');
+
+  const [currentTrack, setCurrentTrack] = useState<MusicTrack | null>(null);
+  const [recent, setRecent] = useState<MusicTrack[]>([]);
+
+  // AI 润色预览
+  const [optimizing, setOptimizing] = useState(false);
+  const [optimized, setOptimized] = useState<{ sunoPrompt: string; tags: string } | null>(null);
+
+  // 分享弹窗
+  const [shareTrack, setShareTrack] = useState<MusicTrack | null>(null);
+  const [shareDesc, setShareDesc] = useState('');
+  const [sharing, setSharing] = useState(false);
+
+  const pollTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  /** 服务端记录 → AudioPlayer 兼容结构 */
+  const toTrack = useCallback((r: {
+    id: string; title: string; description: string; audioUrl?: string | null;
+    tags: string; mood: string; prompt: string; createdAt: string;
+  }): MusicTrack => ({
+    id: r.id,
+    title: r.title,
+    description: r.description,
+    audioUrl: r.audioUrl || '',
+    style: r.tags || '',
+    mood: r.mood,
+    duration: 0,
+    prompt: r.prompt,
+    createdAt: r.createdAt,
+  }), []);
+
+  const loadRecent = useCallback(async () => {
+    try {
+      const list = await musicApi.list();
+      setRecent(list.filter((m) => m.status === 'completed').slice(0, 5).map(toTrack));
+    } catch {
+      // 列表加载失败不阻塞页面
+    }
+  }, []);
+
+  useEffect(() => {
+    loadRecent();
+    // 广场「用此提示词创作」跳转过来的预填
+    const prefill = sessionStorage.getItem('aimusic_prefill_prompt');
+    if (prefill) {
+      setPrompt(prefill);
+      sessionStorage.removeItem('aimusic_prefill_prompt');
+    }
+    return () => {
+      if (pollTimer.current) clearInterval(pollTimer.current);
+    };
+  }, [loadRecent]);
+
+  /** 轮询生成状态直到完成/失败 */
+  const pollStatus = useCallback((musicId: string) => {
+    const startedAt = Date.now();
+    if (pollTimer.current) clearInterval(pollTimer.current);
+
+    pollTimer.current = setInterval(async () => {
+      try {
+        const record = await musicApi.detail(musicId);
+        if (record.status === 'completed') {
+          if (pollTimer.current) clearInterval(pollTimer.current);
+          setGenerating(false);
+          setProgress(100);
+          setCurrentTrack(toTrack(record));
+          setRecent((prev) => [toTrack(record), ...prev].slice(0, 5));
+          refreshUser();
+          toast.success(`「${record.title}」生成完成！`);
+        } else if (record.status === 'failed') {
+          if (pollTimer.current) clearInterval(pollTimer.current);
+          setGenerating(false);
+          setProgress(0);
+          refreshUser(); // 失败也会占用配额，刷新展示
+          toast.error(record.failReason || '生成失败，请调整描述后重试');
+        } else if (Date.now() - startedAt > POLL_TIMEOUT) {
+          if (pollTimer.current) clearInterval(pollTimer.current);
+          setGenerating(false);
+          setProgress(0);
+          toast.error('生成超时，可稍后在音乐库查看结果');
+        }
+      } catch {
+        // 单次轮询失败忽略，下一轮重试
+      }
+    }, POLL_INTERVAL);
+  }, [refreshUser, toTrack]);
 
   const handleGenerate = useCallback(async () => {
     if (!prompt.trim()) {
@@ -46,116 +135,197 @@ export default function Home({ history, onGenerated, quotaRemaining }: HomeProps
       return;
     }
     if (quotaRemaining <= 0) {
-      toast.error('生成额度已用完，请点击「重置」恢复额度');
+      toast.error('今日生成额度已用完，明天再来吧');
       return;
     }
-    setGenerating(true);
-    setProgress(0);
 
-    // Simulate progress
-    const interval = setInterval(() => {
-      setProgress(prev => Math.min(prev + Math.random() * 15, 90));
-    }, 800);
+    setGenerating(true);
+    setProgress(5);
+    setPhase('DeepSeek 润色提示词中...');
+    setCurrentTrack(null);
+    setOptimized(null);
+
+    // 模拟进度（真实生成 30s-2min）
+    const progressTimer = setInterval(() => {
+      setProgress((prev) => Math.min(prev + Math.random() * 3, 95));
+    }, 1500);
+    setTimeout(() => setPhase('Suno 谱曲中，请耐心等待...'), 6000);
 
     try {
-      const res = await fetch(`${API_BASE_URL}/api/ai/generate-music`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt: prompt.trim(), style: selectedStyle, duration, mood }),
+      const { music: record } = await musicApi.generate({
+        prompt: prompt.trim(),
+        style: selectedStyle,
+        mood,
+        instrumental: !withVocal,
       });
-
-      clearInterval(interval);
-      setProgress(100);
-
-      if (!res.ok) throw new Error('Generation failed');
-      const data = await res.json();
-
-      if (!data.success) throw new Error(data.error || 'Generation failed');
-
-      const track: MusicTrack = data.data;
-      setCurrentTrack(track);
-      onGenerated(track);
-      toast.success(`「${track.title}」生成成功！`);
+      setProgress((prev) => Math.max(prev, 20));
+      setPhase('已提交生成任务...');
+      refreshUser();
+      pollStatus(record.id);
     } catch (err) {
-      clearInterval(interval);
-      toast.error('生成失败，请重试');
-    } finally {
+      clearInterval(progressTimer);
       setGenerating(false);
       setProgress(0);
+      toast.error(err instanceof Error ? err.message : '发起生成失败');
     }
-  }, [prompt, selectedStyle, duration, mood, onGenerated, quotaRemaining]);
+  }, [prompt, selectedStyle, mood, withVocal, quotaRemaining, refreshUser, pollStatus]);
 
-  const handleDownload = useCallback(() => {
+  // 进度条计时器在 generating 结束后清理
+  useEffect(() => {
+    if (!generating) return;
+    const timer = setInterval(() => {
+      setProgress((prev) => Math.min(prev + Math.random() * 3, 95));
+    }, 1500);
+    return () => clearInterval(timer);
+  }, [generating]);
+
+  const handleOptimize = useCallback(async () => {
+    if (!prompt.trim()) {
+      toast.error('请先输入音乐描述');
+      return;
+    }
+    setOptimizing(true);
+    try {
+      const result = await aiApi.optimizePrompt({
+        prompt: prompt.trim(),
+        style: selectedStyle,
+        mood,
+      });
+      setOptimized({ sunoPrompt: result.sunoPrompt, tags: result.tags });
+      toast.success('润色完成');
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : '润色失败');
+    } finally {
+      setOptimizing(false);
+    }
+  }, [prompt, selectedStyle, mood]);
+
+  const handleDownload = useCallback(async () => {
     if (!currentTrack) return;
-    const a = document.createElement('a');
-    a.href = currentTrack.audioUrl;
-    a.download = `${currentTrack.title}.mp3`;
-    a.target = '_blank';
-    a.click();
-    toast.success('开始下载...');
+    try {
+      const { url } = await musicApi.downloadUrl(currentTrack.id);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${currentTrack.title}.mp3`;
+      a.target = '_blank';
+      a.click();
+      toast.success('开始下载...');
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : '获取下载链接失败');
+    }
   }, [currentTrack]);
 
+  const handleShare = useCallback(async () => {
+    if (!shareTrack) return;
+    setSharing(true);
+    try {
+      await plazaApi.create({
+        musicId: shareTrack.id,
+        description: shareDesc.trim(),
+      });
+      toast.success('已分享到广场');
+      setShareTrack(null);
+      setShareDesc('');
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : '分享失败');
+    } finally {
+      setSharing(false);
+    }
+  }, [shareTrack, shareDesc]);
+
   return (
-    <div className="max-w-screen-xl mx-auto px-4 sm:px-6 lg:px-8 pb-20">
-      {/* Hero */}
-      <section className="relative py-16 md:py-24 text-center overflow-hidden">
-        <div className="absolute inset-0 -z-10 pointer-events-none">
-          <div className="absolute top-0 left-1/4 w-72 h-72 rounded-full opacity-20" style={{ background: '#8B5CF6', filter: 'blur(120px)' }} />
-          <div className="absolute bottom-0 right-1/4 w-72 h-72 rounded-full opacity-20" style={{ background: '#EC4899', filter: 'blur(120px)' }} />
-        </div>
-        <h1 className="text-4xl md:text-6xl lg:text-7xl font-bold mb-4 tracking-tight text-[#F8FAFC]">
-          让灵感{' '}
-          <span style={{ background: 'linear-gradient(to right, #8B5CF6, #EC4899)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>
-            随乐而动
-          </span>
+    <div className="grain max-w-screen-xl mx-auto px-4 sm:px-6 lg:px-8 pb-20">
+      {/* Hero —— 编辑式左对齐 */}
+      <section className="py-12 md:py-16 reveal-up" style={{ ['--stagger' as any]: 0 }}>
+        <p className="index-no mb-4">SOUNDPICK · AI 音乐生成</p>
+        <h1
+          className="font-display text-4xl md:text-5xl lg:text-6xl mb-4 tracking-tight"
+          style={{ color: 'var(--sp-ink)' }}
+        >
+          让灵感随乐而动
         </h1>
-        <p className="text-lg text-[#94A3B8] max-w-2xl mx-auto">
-          只需一段文字描述，AI 即可为您创作独一无二的音乐作品。无需专业背景，释放您的无限创意。
+        <p className="text-base max-w-2xl" style={{ color: 'var(--sp-ink-dim)' }}>
+          输入一段描述，DeepSeek 润色提示词，Suno 谱写真正的原创音乐，支持下载与分享。
         </p>
+        {/* 细线 + 装饰波形竖线 */}
+        <div className="mt-8 flex items-center gap-4">
+          <div className="flex items-end gap-[3px]" aria-hidden="true">
+            {[14, 24, 10, 28, 16, 22, 8, 26, 12, 18].map((h, i) => (
+              <span
+                key={i}
+                className="w-px"
+                style={{ height: h, background: i === 3 ? 'var(--sp-accent)' : 'var(--sp-ink-ghost)' }}
+              />
+            ))}
+          </div>
+          <div className="h-px flex-1" style={{ background: 'var(--sp-line)' }} />
+        </div>
       </section>
 
-      {/* Main grid */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
-        {/* Form panel */}
+        {/* 左侧表单 */}
         <div className="lg:col-span-5">
-          <div className="rounded-2xl p-6 md:p-8" style={{ background: 'rgba(30,41,59,0.7)', border: '1px solid rgba(255,255,255,0.1)', backdropFilter: 'blur(12px)' }}>
-            <h2 className="text-xl font-bold mb-6 flex items-center gap-2 text-[#F8FAFC]">
-              <svg className="w-5 h-5" style={{ color: '#8B5CF6' }} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
-              </svg>
-              创作参数
-            </h2>
+          <div
+            className="surface rounded-md p-6 md:p-8 reveal-up"
+            style={{ border: '1px solid var(--sp-line)', ['--stagger' as any]: 1 }}
+          >
+            <div className="flex items-baseline justify-between mb-6">
+              <h2 className="font-display text-xl" style={{ color: 'var(--sp-ink)' }}>创作参数</h2>
+              <span className="index-no">CONSOLE</span>
+            </div>
 
-            <div className="space-y-5">
+            <div className="space-y-6">
               {/* Prompt */}
               <div>
-                <label className="block text-sm font-medium text-[#94A3B8] mb-2">音乐描述</label>
+                <div className="flex justify-between items-center mb-2">
+                  <label className="index-no">PROMPT · 音乐描述</label>
+                  <button
+                    onClick={handleOptimize}
+                    disabled={optimizing || generating}
+                    className="text-xs px-2.5 py-1 rounded-sm transition-colors disabled:opacity-50"
+                    style={{ border: '1px solid var(--sp-line)', color: 'var(--sp-ink-dim)' }}
+                    onMouseEnter={(e) => { if (!e.currentTarget.disabled) e.currentTarget.style.color = 'var(--sp-accent)'; }}
+                    onMouseLeave={(e) => (e.currentTarget.style.color = 'var(--sp-ink-dim)')}
+                  >
+                    {optimizing ? '润色中...' : 'AI 润色'}
+                  </button>
+                </div>
                 <textarea
                   rows={3}
                   value={prompt}
-                  onChange={e => setPrompt(e.target.value)}
-                  placeholder="例如：一段轻松的爵士风格，适合在午后咋啡馆播放，带有萨克斯风的旋律..."
-                  className="w-full rounded-xl p-3 text-sm text-[#F8FAFC] placeholder-[#94A3B8] outline-none transition-all resize-none"
-                  style={{ background: '#0F172A', border: '1px solid #334155' }}
-                  onFocus={e => (e.target.style.borderColor = '#8B5CF6')}
-                  onBlur={e => (e.target.style.borderColor = '#334155')}
+                  onChange={(e) => setPrompt(e.target.value)}
+                  placeholder="例如：一段轻松的爵士风格，适合午后咖啡馆，带有萨克斯风旋律..."
+                  className="w-full rounded-sm p-3 text-sm outline-none transition-colors resize-none placeholder:text-[var(--sp-ink-ghost)]"
+                  style={{ background: 'var(--sp-surface-2)', border: '1px solid var(--sp-line)', color: 'var(--sp-ink)' }}
+                  onFocus={(e) => (e.target.style.borderColor = 'var(--sp-accent)')}
+                  onBlur={(e) => (e.target.style.borderColor = 'var(--sp-line)')}
                 />
+                {optimized && (
+                  <div
+                    className="mt-2 p-3 surface-2 rounded-sm text-xs space-y-1.5"
+                    style={{ borderLeft: '2px solid var(--sp-accent)' }}
+                  >
+                    <p className="index-no">OPTIMIZED · 生成时自动使用</p>
+                    <p style={{ color: 'var(--sp-ink)' }}>{optimized.sunoPrompt}</p>
+                    <p style={{ color: 'var(--sp-ink-ghost)' }}>TAGS · {optimized.tags}</p>
+                  </div>
+                )}
               </div>
 
               {/* Style tags */}
               <div>
-                <label className="block text-sm font-medium text-[#94A3B8] mb-3">风格标签</label>
+                <label className="index-no block mb-3">STYLE · 风格</label>
                 <div className="flex flex-wrap gap-2">
-                  {STYLES.map(s => (
+                  {STYLES.map((s) => (
                     <button
                       key={s.id}
                       onClick={() => setSelectedStyle(s.id)}
-                      className="px-4 py-1.5 rounded-full text-sm transition-all"
-                      style={{
-                        border: selectedStyle === s.id ? '1px solid #8B5CF6' : '1px solid #334155',
-                        background: selectedStyle === s.id ? 'rgba(139,92,246,0.15)' : 'transparent',
-                        color: selectedStyle === s.id ? '#8B5CF6' : '#94A3B8',
-                      }}
+                      className="px-4 py-1.5 rounded-md text-sm transition-all"
+                      style={
+                        selectedStyle === s.id
+                          ? { background: 'var(--sp-accent)', color: '#14120E', border: '1px solid var(--sp-accent)', fontWeight: 600 }
+                          : { background: 'transparent', color: 'var(--sp-ink-dim)', border: '1px solid var(--sp-line)' }
+                      }
                     >
                       {s.label}
                     </button>
@@ -163,33 +333,34 @@ export default function Home({ history, onGenerated, quotaRemaining }: HomeProps
                 </div>
               </div>
 
-              {/* Duration & Mood */}
+              {/* Mood + Vocal */}
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-sm font-medium text-[#94A3B8] mb-2">时长</label>
+                  <label className="index-no block mb-2">MOOD · 情绪</label>
                   <select
-                    value={duration}
-                    onChange={e => setDuration(Number(e.target.value))}
-                    className="w-full rounded-lg p-2.5 text-sm text-[#F8FAFC] outline-none"
-                    style={{ background: '#0F172A', border: '1px solid #334155' }}
+                    value={mood}
+                    onChange={(e) => setMood(e.target.value)}
+                    className="w-full rounded-sm p-2.5 text-sm outline-none"
+                    style={{ background: 'var(--sp-surface-2)', border: '1px solid var(--sp-line)', color: 'var(--sp-ink)' }}
                   >
-                    {DURATIONS.map(d => (
-                      <option key={d.value} value={d.value}>{d.label}</option>
+                    {MOODS.map((m) => (
+                      <option key={m.value} value={m.value}>{m.label}</option>
                     ))}
                   </select>
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-[#94A3B8] mb-2">情绪</label>
-                  <select
-                    value={mood}
-                    onChange={e => setMood(e.target.value)}
-                    className="w-full rounded-lg p-2.5 text-sm text-[#F8FAFC] outline-none"
-                    style={{ background: '#0F172A', border: '1px solid #334155' }}
+                  <label className="index-no block mb-2">VOCAL · 人声</label>
+                  <button
+                    onClick={() => setWithVocal(!withVocal)}
+                    className="w-full rounded-sm p-2.5 text-sm transition-colors text-left"
+                    style={{
+                      background: 'var(--sp-surface-2)',
+                      border: withVocal ? '1px solid var(--sp-accent)' : '1px solid var(--sp-line)',
+                      color: withVocal ? 'var(--sp-accent)' : 'var(--sp-ink-dim)',
+                    }}
                   >
-                    {MOODS.map(m => (
-                      <option key={m.value} value={m.value}>{m.label}</option>
-                    ))}
-                  </select>
+                    {withVocal ? '♪ 包含人声' : '纯音乐（无人声）'}
+                  </button>
                 </div>
               </div>
 
@@ -197,8 +368,8 @@ export default function Home({ history, onGenerated, quotaRemaining }: HomeProps
               <button
                 onClick={handleGenerate}
                 disabled={generating || quotaRemaining <= 0}
-                className="w-full py-4 rounded-xl font-bold text-lg text-white transition-all flex items-center justify-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
-                style={{ background: 'linear-gradient(to right, #8B5CF6, #EC4899)' }}
+                className="w-full py-4 rounded-md font-bold text-lg transition-all flex items-center justify-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed hover:-translate-y-0.5"
+                style={{ background: 'var(--sp-accent)', color: '#14120E' }}
               >
                 {generating ? (
                   <>
@@ -218,79 +389,122 @@ export default function Home({ history, onGenerated, quotaRemaining }: HomeProps
                 )}
               </button>
 
-              {/* Progress bar */}
+              {/* Progress */}
               {generating && (
-                <div className="space-y-1">
-                  <div className="h-1.5 rounded-full overflow-hidden" style={{ background: '#334155' }}>
+                <div className="space-y-2">
+                  <div className="relative h-px w-full overflow-hidden" style={{ background: 'var(--sp-line)' }}>
                     <div
-                      className="h-full rounded-full transition-all duration-500"
-                      style={{ width: `${progress}%`, background: 'linear-gradient(to right, #8B5CF6, #EC4899)' }}
+                      className="absolute left-0 top-0 h-full transition-all duration-700"
+                      style={{ width: `${progress}%`, background: 'var(--sp-accent)' }}
                     />
                   </div>
-                  <p className="text-xs text-center text-[#94A3B8]">预计还需 {Math.max(1, Math.round((100 - progress) / 15))} 秒</p>
+                  <p className="index-no text-center">
+                    PHASE {phase.includes('Suno') ? '02' : phase.includes('已提交') ? '03' : '01'} · {phase || '准备中...'}（通常需要 1-2 分钟）
+                  </p>
                 </div>
               )}
 
-              <p className="text-center text-xs text-[#94A3B8]">
-                剩余生成次数：<span className="text-[#F8FAFC] font-medium">{quotaRemaining}/10</span>
+              <p className="text-center text-xs" style={{ color: 'var(--sp-ink-dim)' }}>
+                剩余生成次数：
+                <span className="font-medium" style={{ color: 'var(--sp-ink)' }}>{quotaRemaining}/10</span>
                 {quotaRemaining <= 0 && (
-                  <span className="block mt-1 text-[#EF4444]">额度已用完，请在右上角点击「重置」</span>
+                  <span className="block mt-1" style={{ color: 'var(--sp-error)' }}>今日额度已用完，明天自动恢复</span>
                 )}
               </p>
             </div>
           </div>
         </div>
 
-        {/* Right panel */}
+        {/* 右侧结果 */}
         <div className="lg:col-span-7 space-y-6">
-          {/* Player or empty state */}
           {currentTrack ? (
-            <AudioPlayer track={currentTrack} onDownload={handleDownload} />
+            <div className="space-y-3 reveal-up" style={{ ['--stagger' as any]: 2 }}>
+              <AudioPlayer track={currentTrack} onDownload={handleDownload} />
+              <div className="flex justify-end">
+                <button
+                  onClick={() => setShareTrack(currentTrack)}
+                  className="px-4 py-2 rounded-md text-sm font-medium transition-colors flex items-center gap-2"
+                  style={{ border: '1px solid var(--sp-line)', color: 'var(--sp-ink-dim)' }}
+                  onMouseEnter={(e) => (e.currentTarget.style.color = 'var(--sp-accent)')}
+                  onMouseLeave={(e) => (e.currentTarget.style.color = 'var(--sp-ink-dim)')}
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.367 2.684 3 3 0 00-5.367-2.684z" />
+                  </svg>
+                  分享到广场
+                </button>
+              </div>
+            </div>
           ) : (
             <div
-              className="rounded-2xl p-12 flex flex-col items-center justify-center text-center min-h-[200px]"
-              style={{ background: 'rgba(30,41,59,0.4)', border: '1px dashed #334155' }}
+              className="surface rounded-md p-12 flex flex-col items-center justify-center text-center min-h-[200px] reveal-up"
+              style={{ border: '1px dashed var(--sp-line)', ['--stagger' as any]: 2 }}
             >
-              <div className="w-16 h-16 rounded-full flex items-center justify-center mb-4" style={{ background: 'rgba(139,92,246,0.1)' }}>
-                <svg className="w-8 h-8" style={{ color: '#8B5CF6' }} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <div
+                className="w-16 h-16 rounded-full flex items-center justify-center mb-4 surface-2"
+                style={{ border: '1px solid var(--sp-line)' }}
+              >
+                <svg className="w-8 h-8" style={{ color: 'var(--sp-accent)' }} fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
                 </svg>
               </div>
-              <p className="text-[#94A3B8] font-medium">输入描述并点击「立即生成」</p>
-              <p className="text-[#94A3B8] text-sm mt-1">您的音乐作品将在这里展示</p>
+              <p className="font-medium" style={{ color: 'var(--sp-ink)' }}>输入描述并点击「立即生成」</p>
+              <p className="text-sm mt-1" style={{ color: 'var(--sp-ink-dim)' }}>生成完成后可下载、分享到广场</p>
             </div>
           )}
 
-          {/* Recent history */}
-          {history.length > 0 && (
-            <div className="rounded-2xl p-6" style={{ background: 'rgba(30,41,59,0.7)', border: '1px solid rgba(255,255,255,0.1)', backdropFilter: 'blur(12px)' }}>
-              <div className="flex justify-between items-center mb-4">
-                <h4 className="font-bold text-[#F8FAFC]">最近生成</h4>
-                <a href="#/history" className="text-sm hover:underline" style={{ color: '#8B5CF6' }}>查看全部</a>
+          {/* 最近生成 */}
+          {recent.length > 0 && (
+            <div
+              className="surface rounded-md p-6 reveal-up"
+              style={{ border: '1px solid var(--sp-line)', ['--stagger' as any]: 3 }}
+            >
+              <div className="flex justify-between items-baseline mb-2">
+                <div>
+                  <span className="index-no block mb-1">RECENT</span>
+                  <h4 className="font-display text-lg" style={{ color: 'var(--sp-ink)' }}>最近生成</h4>
+                </div>
+                <button
+                  onClick={() => onNavigate?.('/library')}
+                  className="text-xs hover:underline"
+                  style={{ color: 'var(--sp-accent)' }}
+                >
+                  前往音乐库
+                </button>
               </div>
-              <div className="space-y-2">
-                {history.slice(0, 3).map((track, idx) => (
+              <div>
+                {recent.slice(0, 3).map((track, idx) => (
                   <div
                     key={track.id}
-                    className="flex items-center gap-3 p-3 rounded-xl transition-colors cursor-pointer group"
-                    style={{ background: 'transparent' }}
-                    onMouseEnter={e => (e.currentTarget.style.background = 'rgba(255,255,255,0.05)')}
-                    onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+                    className="flex items-center gap-4 py-3 px-2 -mx-2 rounded-sm transition-colors cursor-pointer group"
+                    style={{ borderTop: idx === 0 ? 'none' : '1px solid var(--sp-line-subtle)' }}
+                    onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--sp-surface-2)')}
+                    onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
                     onClick={() => setCurrentTrack(track)}
                   >
-                    <div className="w-9 h-9 rounded-lg flex items-center justify-center text-xs font-bold text-[#94A3B8] flex-shrink-0"
-                      style={{ background: '#1E293B' }}>
-                      {String(idx + 1).padStart(2, '0')}
+                    <div
+                      className="w-16 h-16 rounded-sm overflow-hidden flex-shrink-0"
+                      style={{ border: '1px solid var(--sp-line)' }}
+                    >
+                      <CoverArt seed={track.title} size={64} />
                     </div>
                     <div className="flex-grow min-w-0">
-                      <p className="text-sm font-medium text-[#F8FAFC] truncate">{track.title}</p>
-                      <p className="text-xs text-[#94A3B8]">{new Date(track.createdAt).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</p>
+                      <p className="font-display truncate" style={{ color: 'var(--sp-ink)' }}>{track.title}</p>
+                      <p className="text-xs mt-1 flex items-center gap-2" style={{ color: 'var(--sp-ink-dim)' }}>
+                        <span className="index-no">No.{String(idx + 1).padStart(3, '0')}</span>
+                        <span>
+                          {new Date(track.createdAt).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                        </span>
+                      </p>
                     </div>
-                    <button className="opacity-0 group-hover:opacity-100 transition-opacity text-[#94A3B8] hover:text-[#F8FAFC]">
-                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
-                      </svg>
-                    </button>
+                    <svg
+                      className="w-5 h-5 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0"
+                      style={{ color: 'var(--sp-accent)' }}
+                      fill="currentColor"
+                      viewBox="0 0 24 24"
+                    >
+                      <path d="M8 5v14l11-7z" />
+                    </svg>
                   </div>
                 ))}
               </div>
@@ -298,6 +512,52 @@ export default function Home({ history, onGenerated, quotaRemaining }: HomeProps
           )}
         </div>
       </div>
+
+      {/* 分享弹窗 */}
+      {shareTrack && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center px-4"
+          style={{ background: 'rgba(20,18,14,0.75)' }}
+          onClick={() => setShareTrack(null)}
+        >
+          <div
+            className="w-full max-w-md rounded-md p-6 surface-2"
+            style={{ border: '1px solid var(--sp-line)' }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <p className="index-no mb-2">SHARE</p>
+            <h3 className="font-display text-lg mb-1" style={{ color: 'var(--sp-ink)' }}>分享到广场</h3>
+            <p className="text-sm mb-4" style={{ color: 'var(--sp-ink-dim)' }}>「{shareTrack.title}」— 音频与提示词将一起公开</p>
+            <textarea
+              rows={3}
+              value={shareDesc}
+              onChange={(e) => setShareDesc(e.target.value)}
+              placeholder="简单介绍一下这首音乐（可选）..."
+              className="w-full rounded-sm p-3 text-sm outline-none resize-none mb-4 placeholder:text-[var(--sp-ink-ghost)]"
+              style={{ background: 'var(--sp-surface)', border: '1px solid var(--sp-line)', color: 'var(--sp-ink)' }}
+              onFocus={(e) => (e.target.style.borderColor = 'var(--sp-accent)')}
+              onBlur={(e) => (e.target.style.borderColor = 'var(--sp-line)')}
+            />
+            <div className="flex gap-3">
+              <button
+                onClick={() => setShareTrack(null)}
+                className="flex-1 py-2.5 rounded-md text-sm transition-colors"
+                style={{ border: '1px solid var(--sp-line)', color: 'var(--sp-ink-dim)' }}
+              >
+                取消
+              </button>
+              <button
+                onClick={handleShare}
+                disabled={sharing}
+                className="flex-1 py-2.5 rounded-md text-sm font-bold disabled:opacity-60"
+                style={{ background: 'var(--sp-accent)', color: '#14120E' }}
+              >
+                {sharing ? '分享中...' : '确认分享'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

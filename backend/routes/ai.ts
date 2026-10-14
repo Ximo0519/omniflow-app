@@ -1,105 +1,49 @@
 import { Router, Request, Response } from 'express';
+import { requireAuth } from '../middleware/auth';
 import { createAIService } from '../services/aiService';
 
 const router = Router();
 
-// Streaming chat endpoint
-router.post('/chat', async (req: Request, res: Response) => {
+/**
+ * DeepSeek 提示词润色：把用户的中文简短描述扩写为 Suno 可用的英文提示词
+ * 供前端「AI 润色」按钮与音乐生成流程使用
+ */
+router.post('/optimize-prompt', requireAuth, async (req: Request, res: Response) => {
   try {
-    const { message, systemPrompt } = req.body;
-
-    if (!message) {
-      return res.status(400).json({ success: false, error: 'Message is required' });
+    const { prompt, style, mood } = req.body;
+    if (!prompt || !String(prompt).trim()) {
+      return res.status(400).json({ success: false, error: '请输入音乐描述' });
     }
 
-    const aiService = createAIService();
-    const appLink = req.get('Referer') || req.get('Origin') || `${req.protocol}://${req.get('host')}`;
+    const ai = createAIService();
+    const systemPrompt = `You are a professional Suno AI music prompt engineer. Based on the user's Chinese music description, produce:
+1. "title": a poetic Chinese music title (2-8 characters)
+2. "sunoPrompt": a vivid English music prompt for Suno (1-3 sentences, describing genre, instruments, tempo, atmosphere)
+3. "tags": comma-separated English style tags (3-6 tags, e.g. "lofi, jazz, piano, relaxing")
+Respond ONLY with JSON: {"title":"...","sunoPrompt":"...","tags":"..."}`;
 
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    const userMessage = `描述: ${String(prompt).trim()}\n风格: ${style || '不限'}\n情绪: ${mood || '不限'}`;
 
-    res.setHeader('Content-Type', 'text/event-stream');
-    res.setHeader('Cache-Control', 'no-cache');
-    res.setHeader('Connection', 'keep-alive');
-
-    let clientDisconnected = false;
-    req.on('close', () => { clientDisconnected = true; });
-
-    for await (const chunk of aiService.chatDefault(message, systemPrompt, appLink)) {
-      if (clientDisconnected || res.writableEnded) break;
-      res.write(`data: ${JSON.stringify({ content: chunk })}\n\n`);
+    const raw = await ai.chat(userMessage, systemPrompt);
+    const jsonMatch = raw.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) {
+      return res
+        .status(502)
+        .json({ success: false, error: '润色结果解析失败，请重试' });
     }
 
-    if (!res.writableEnded) {
-      res.write('data: [DONE]\n\n');
-      res.end();
-    }
-  } catch (error) {
-    console.error('Chat error:', error);
-    if (!res.headersSent) {
-      res.status(500).json({ success: false, error: 'Internal server error' });
-    } else {
-      res.end();
-    }
-  }
-});
-
-// Music generation endpoint - uses AI to generate music description and simulate generation
-router.post('/generate-music', async (req: Request, res: Response) => {
-  try {
-    const { prompt, style, duration, mood } = req.body;
-
-    if (!prompt) {
-      return res.status(400).json({ success: false, error: 'Prompt is required' });
-    }
-
-    const aiService = createAIService();
-    const appLink = req.get('Referer') || req.get('Origin') || `${req.protocol}://${req.get('host')}`;
-
-    const systemPrompt = `You are a creative music title generator. Given a music description, style, mood, and duration, generate a creative Chinese music title (2-8 characters) and a brief description (1-2 sentences in Chinese). Respond in JSON format: {"title": "...", "description": "..."}. Keep the title poetic and evocative.`;
-
-    const userMessage = `Music description: ${prompt}\nStyle: ${style || 'general'}\nMood: ${mood || 'neutral'}\nDuration: ${duration || 60} seconds\n\nGenerate a creative title and description for this music.`;
-
-    const response = await aiService.chat(userMessage, systemPrompt, appLink);
-
-    let title = '未命名音乐';
-    let description = prompt;
-
-    try {
-      const jsonMatch = response.match(/\{[\s\S]*\}/);
-      if (jsonMatch) {
-        const parsed = JSON.parse(jsonMatch[0]);
-        title = parsed.title || title;
-        description = parsed.description || description;
-      }
-    } catch {
-      // fallback to defaults
-    }
-
-    // Return a simulated audio URL (in production this would call a real music generation API)
-    const sampleAudioUrls = [
-      'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3',
-      'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-2.mp3',
-      'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-3.mp3',
-    ];
-    const audioUrl = sampleAudioUrls[Math.floor(Math.random() * sampleAudioUrls.length)];
-
-    res.json({
+    const parsed = JSON.parse(jsonMatch[0]);
+    return res.json({
       success: true,
       data: {
-        id: `music_${Date.now()}`,
-        title,
-        description,
-        audioUrl,
-        style: style || 'general',
-        mood: mood || 'neutral',
-        duration: duration || 60,
-        prompt,
-        createdAt: new Date().toISOString(),
+        title: parsed.title || '未命名音乐',
+        sunoPrompt: parsed.sunoPrompt || String(prompt).trim(),
+        tags: parsed.tags || String(style || ''),
       },
     });
   } catch (error) {
-    console.error('Music generation error:', error);
-    res.status(500).json({ success: false, error: 'Music generation failed' });
+    console.error('Optimize prompt error:', error);
+    return res.status(500).json({ success: false, error: '提示词润色失败' });
   }
 });
 

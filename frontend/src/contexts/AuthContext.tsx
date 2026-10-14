@@ -2,105 +2,115 @@ import {
   createContext,
   useContext,
   useState,
+  useEffect,
   useCallback,
-  ReactNode,
+  type ReactNode,
 } from 'react';
+import { authApi, getToken, setToken, isDevPreview, MOCK_USER, type User } from '@/lib/api';
 
-const TEST_USERNAME = 'admin';
-const TEST_PASSWORD = '123456';
-const MAX_QUOTA = 10;
-
-const AUTH_KEY = 'omniflow_auth';
-const QUOTA_KEY = 'omniflow_quota_used';
-
-interface AuthState {
-  username: string;
-  loginAt: number;
-}
-
-interface AuthContextType {
+interface AuthContextValue {
+  user: User | null;
+  token: string | null;
   isAuthenticated: boolean;
-  username: string | null;
-  quotaUsed: number;
-  quotaRemaining: number;
-  maxQuota: number;
-  login: (username: string, password: string) => boolean;
+  loading: boolean; // 启动时校验 token 是否加载中
+  login: (username: string, password: string) => Promise<void>;
+  register: (username: string, password: string) => Promise<void>;
   logout: () => void;
-  incrementQuota: () => void;
-  resetAccount: () => void;
+  refreshUser: () => Promise<void>; // 生成音乐后刷新配额
 }
 
-const AuthContext = createContext<AuthContextType | undefined>(undefined);
+const AuthContext = createContext<AuthContextValue | null>(null);
 
-export const AuthProvider = ({ children }: { children: ReactNode }) => {
-  const [authState, setAuthState] = useState<AuthState | null>(() => {
-    try {
-      const raw = localStorage.getItem(AUTH_KEY);
-      return raw ? JSON.parse(raw) : null;
-    } catch {
-      return null;
-    }
-  });
+export function AuthProvider({ children }: { children: ReactNode }) {
+  // 开发预览模式：无后端时直接以模拟用户进入内页（localStorage 设置 aimusic_dev_preview=1）
+  const devPreview = isDevPreview();
+  const [token, setTokenState] = useState<string | null>(
+    devPreview ? 'dev-preview-token' : getToken(),
+  );
+  const [user, setUser] = useState<User | null>(devPreview ? MOCK_USER : null);
+  const [loading, setLoading] = useState<boolean>(
+    devPreview ? false : !!getToken(),
+  );
 
-  const [quotaUsed, setQuotaUsed] = useState<number>(() => {
-    try {
-      const raw = localStorage.getItem(QUOTA_KEY);
-      return raw ? JSON.parse(raw) : 0;
-    } catch {
-      return 0;
+  // 启动时校验已有 token
+  useEffect(() => {
+    if (devPreview) return;
+    const t = getToken();
+    if (!t) {
+      setLoading(false);
+      return;
     }
-  });
+    authApi
+      .me()
+      .then((u) => {
+        setUser(u);
+        setTokenState(t);
+      })
+      .catch(() => {
+        setToken(null);
+        setTokenState(null);
+        setUser(null);
+      })
+      .finally(() => setLoading(false));
+  }, []);
 
-  const login = useCallback((username: string, password: string) => {
-    if (username === TEST_USERNAME && password === TEST_PASSWORD) {
-      const state = { username, loginAt: Date.now() };
-      localStorage.setItem(AUTH_KEY, JSON.stringify(state));
-      setAuthState(state);
-      return true;
-    }
-    return false;
+  const login = useCallback(async (username: string, password: string) => {
+    const { token: newToken, user: newUser } = await authApi.login(
+      username,
+      password,
+    );
+    setToken(newToken);
+    setTokenState(newToken);
+    setUser(newUser);
+  }, []);
+
+  const register = useCallback(async (username: string, password: string) => {
+    const { token: newToken, user: newUser } = await authApi.register(
+      username,
+      password,
+    );
+    setToken(newToken);
+    setTokenState(newToken);
+    setUser(newUser);
   }, []);
 
   const logout = useCallback(() => {
-    localStorage.removeItem(AUTH_KEY);
-    setAuthState(null);
+    setToken(null);
+    setTokenState(null);
+    setUser(null);
   }, []);
 
-  const incrementQuota = useCallback(() => {
-    setQuotaUsed((prev) => {
-      const next = prev + 1;
-      localStorage.setItem(QUOTA_KEY, JSON.stringify(next));
-      return next;
-    });
-  }, []);
-
-  const resetAccount = useCallback(() => {
-    localStorage.setItem(QUOTA_KEY, '0');
-    localStorage.removeItem('ai-music-history');
-    setQuotaUsed(0);
+  const refreshUser = useCallback(async () => {
+    try {
+      const u = await authApi.me();
+      setUser(u);
+    } catch {
+      // 忽略刷新失败（如网络抖动）
+    }
   }, []);
 
   return (
     <AuthContext.Provider
       value={{
-        isAuthenticated: !!authState,
-        username: authState?.username ?? null,
-        quotaUsed,
-        quotaRemaining: Math.max(0, MAX_QUOTA - quotaUsed),
-        maxQuota: MAX_QUOTA,
+        user,
+        token,
+        isAuthenticated: !!user && !!token,
+        loading,
         login,
+        register,
         logout,
-        incrementQuota,
-        resetAccount,
+        refreshUser,
       }}
     >
       {children}
     </AuthContext.Provider>
   );
-};
+}
 
-export const useAuth = () => {
-  const context = useContext(AuthContext);
-  if (!context) throw new Error('useAuth must be used within AuthProvider');
-  return context;
-};
+export function useAuth(): AuthContextValue {
+  const ctx = useContext(AuthContext);
+  if (!ctx) {
+    throw new Error('useAuth 必须在 AuthProvider 内使用');
+  }
+  return ctx;
+}

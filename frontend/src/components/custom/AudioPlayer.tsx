@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import { MusicTrack } from '@shared/types/api';
+import CoverArt from '@/components/custom/CoverArt';
 
 interface AudioPlayerProps {
   track: MusicTrack;
@@ -82,32 +83,60 @@ export default function AudioPlayer({ track, onDownload }: AudioPlayerProps) {
   };
 
   return (
-    <div className="rounded-2xl p-6 md:p-8" style={{ background: 'rgba(30,41,59,0.7)', border: '1px solid rgba(255,255,255,0.1)', backdropFilter: 'blur(12px)' }}>
+    <div className="surface rounded-md p-6 md:p-8" style={{ border: '1px solid var(--sp-line)' }}>
       <audio ref={audioRef} src={track.audioUrl} preload="metadata" />
 
-      <div className="flex flex-col md:flex-row gap-6 items-center">
-        {/* Album art */}
-        <div className="w-36 h-36 md:w-44 md:h-44 flex-shrink-0 rounded-2xl flex items-center justify-center relative overflow-hidden"
-          style={{ background: 'linear-gradient(135deg, #8B5CF6 0%, #EC4899 100%)' }}>
-          <div className="absolute inset-0 opacity-20" style={{ backgroundImage: 'radial-gradient(circle at 30% 30%, white 1px, transparent 1px)', backgroundSize: '20px 20px' }} />
-          <svg className="w-16 h-16 text-white opacity-80" fill="currentColor" viewBox="0 0 24 24">
-            <path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z" />
-          </svg>
+      <div className="flex flex-col md:flex-row gap-8 items-center">
+        {/* 黑胶唱盘 + 封套 */}
+        <div className="relative flex-shrink-0 w-52 h-44 md:w-64 md:h-56">
+          {/* 封套：右半探出 */}
+          <div
+            className="surface-2 rounded-sm absolute top-0 right-0 h-full w-44 md:w-56"
+            style={{ border: '1px solid var(--sp-line)' }}
+          >
+            <div className="absolute top-0 bottom-0 right-2 w-[2px]" style={{ background: 'var(--sp-accent)' }} />
+            <div className="absolute top-0 bottom-0 right-4 w-px" style={{ background: 'var(--sp-line)' }} />
+          </div>
+          {/* 唱片：播放时旋转，暂停时停在原角度 */}
+          <div
+            className={`absolute top-0 left-0 w-44 h-44 md:w-56 md:h-56 rounded-full vinyl-spin${isPlaying ? '' : ' vinyl-paused'}`}
+            style={{
+              background:
+                'conic-gradient(from 210deg, transparent 0deg, rgba(242,234,217,0.07) 25deg, transparent 70deg), repeating-radial-gradient(circle, #111110 0 2px, #1C1A16 2px 4px)',
+              border: '1px solid var(--sp-line)',
+              boxShadow: '0 10px 28px rgba(0,0,0,0.5)',
+            }}
+          >
+            {/* 中心圆形标签 */}
+            <div className="absolute inset-0 flex items-center justify-center">
+              <div
+                className="w-[38%] aspect-square rounded-full overflow-hidden"
+                style={{ border: '1px solid var(--sp-line)' }}
+              >
+                <CoverArt seed={track.title} size={100} className="w-full h-full" />
+              </div>
+            </div>
+            {/* 轴心孔 */}
+            <div
+              className="absolute top-1/2 left-1/2 w-2 h-2 rounded-full"
+              style={{ transform: 'translate(-50%,-50%)', background: 'var(--sp-bg)', border: '1px solid var(--sp-line)' }}
+            />
+          </div>
         </div>
 
-        {/* Info & controls */}
-        <div className="flex-grow w-full">
-          <div className="flex justify-between items-start mb-3">
-            <div>
-              <h3 className="text-xl md:text-2xl font-bold text-[#F8FAFC]">{track.title}</h3>
-              <p className="text-[#94A3B8] text-sm mt-1">
-                风格：{styleLabels[track.style] || track.style} | 情绪：{moodLabels[track.mood] || track.mood}
-              </p>
-              <p className="text-[#94A3B8] text-xs mt-1 line-clamp-2">{track.description}</p>
+        {/* 信息与控制 */}
+        <div className="flex-grow w-full min-w-0">
+          <div className="flex justify-between items-start gap-3">
+            <div className="flex items-center gap-3 flex-wrap">
+              <span className="index-no">STYLE · {styleLabels[track.style] || track.style}</span>
+              <span className="index-no">MOOD · {moodLabels[track.mood] || track.mood}</span>
             </div>
             <button
               onClick={onDownload}
-              className="p-2 rounded-full hover:bg-white/10 transition-colors text-[#94A3B8] hover:text-[#F8FAFC] flex-shrink-0"
+              className="p-2 rounded-sm transition-colors flex-shrink-0"
+              style={{ border: '1px solid var(--sp-line)', color: 'var(--sp-ink-dim)' }}
+              onMouseEnter={(e) => (e.currentTarget.style.color = 'var(--sp-accent)')}
+              onMouseLeave={(e) => (e.currentTarget.style.color = 'var(--sp-ink-dim)')}
               title="下载"
             >
               <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -116,42 +145,66 @@ export default function AudioPlayer({ track, onDownload }: AudioPlayerProps) {
             </button>
           </div>
 
-          {/* Progress bar */}
-          <div className="space-y-1 mb-4">
-            <input
-              type="range"
-              min={0}
-              max={duration || 100}
-              value={currentTime}
-              onChange={handleSeek}
-              className="w-full h-1.5 rounded-full appearance-none cursor-pointer"
-              style={{
-                background: `linear-gradient(to right, #8B5CF6 ${progress}%, #334155 ${progress}%)`,
-              }}
-            />
-            <div className="flex justify-between text-xs text-[#94A3B8]">
+          <h3 className="font-display text-2xl md:text-3xl mt-2" style={{ color: 'var(--sp-ink)' }}>
+            {track.title}
+          </h3>
+          <p className="text-sm mt-1 mb-6 line-clamp-2" style={{ color: 'var(--sp-ink-dim)' }}>
+            {track.description}
+          </p>
+
+          {/* 进度条：1px 细线 + accent 播放头 */}
+          <div className="mb-5">
+            <div className="relative h-5 flex items-center">
+              <div
+                className="absolute inset-x-0 top-1/2 h-px"
+                style={{ transform: 'translateY(-50%)', background: 'var(--sp-line)' }}
+              />
+              <div
+                className="absolute left-0 top-1/2 h-px"
+                style={{ transform: 'translateY(-50%)', width: `${progress}%`, background: 'var(--sp-accent)' }}
+              />
+              <div
+                className="absolute w-2.5 h-2.5 rounded-full"
+                style={{ left: `${progress}%`, top: '50%', transform: 'translate(-50%,-50%)', background: 'var(--sp-accent)' }}
+              />
+              <input
+                type="range"
+                min={0}
+                max={duration || 100}
+                value={currentTime}
+                onChange={handleSeek}
+                className="absolute inset-0 w-full opacity-0 cursor-pointer"
+                aria-label="播放进度"
+              />
+            </div>
+            <div className="flex justify-between font-mono text-[11px] mt-1.5" style={{ color: 'var(--sp-ink-dim)' }}>
               <span>{formatTime(currentTime)}</span>
               <span>{formatTime(duration)}</span>
             </div>
           </div>
 
-          {/* Playback controls */}
-          <div className="flex items-center justify-center gap-6">
+          {/* 播放控制 */}
+          <div className="flex items-center justify-center gap-4">
             <button
-              className="text-[#94A3B8] hover:text-[#F8FAFC] transition-colors"
+              className="h-9 px-3 rounded-sm flex items-center gap-1.5 transition-colors"
+              style={{ border: '1px solid var(--sp-line)', color: 'var(--sp-ink-dim)' }}
+              onMouseEnter={(e) => (e.currentTarget.style.color = 'var(--sp-accent)')}
+              onMouseLeave={(e) => (e.currentTarget.style.color = 'var(--sp-ink-dim)')}
               onClick={() => {
                 if (audioRef.current) { audioRef.current.currentTime = Math.max(0, currentTime - 10); }
               }}
+              title="后退 10 秒"
             >
-              <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 24 24">
+              <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
                 <path d="M6 6h2v12H6zm3.5 6l8.5 6V6z" />
               </svg>
+              <span className="font-mono text-[10px]">10s</span>
             </button>
 
             <button
               onClick={togglePlay}
-              className="w-14 h-14 rounded-full flex items-center justify-center transition-transform hover:scale-105 text-[#0F172A]"
-              style={{ background: '#F8FAFC' }}
+              className="w-14 h-14 rounded-full flex items-center justify-center transition-transform hover:-translate-y-0.5"
+              style={{ background: 'var(--sp-accent)', color: '#14120E' }}
             >
               {loading ? (
                 <svg className="w-6 h-6 animate-spin" fill="none" viewBox="0 0 24 24">
@@ -170,12 +223,17 @@ export default function AudioPlayer({ track, onDownload }: AudioPlayerProps) {
             </button>
 
             <button
-              className="text-[#94A3B8] hover:text-[#F8FAFC] transition-colors"
+              className="h-9 px-3 rounded-sm flex items-center gap-1.5 transition-colors"
+              style={{ border: '1px solid var(--sp-line)', color: 'var(--sp-ink-dim)' }}
+              onMouseEnter={(e) => (e.currentTarget.style.color = 'var(--sp-accent)')}
+              onMouseLeave={(e) => (e.currentTarget.style.color = 'var(--sp-ink-dim)')}
               onClick={() => {
                 if (audioRef.current) { audioRef.current.currentTime = Math.min(duration, currentTime + 10); }
               }}
+              title="前进 10 秒"
             >
-              <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 24 24">
+              <span className="font-mono text-[10px]">10s</span>
+              <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
                 <path d="M16 18h2V6h-2zm-8.5-6L16 6v12z" />
               </svg>
             </button>

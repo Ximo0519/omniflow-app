@@ -1,44 +1,45 @@
+const GENRES = ['JAZZ', 'SYNTHWAVE', 'LO-FI', 'AMBIENT', 'FOLK', 'CITY POP'];
+
 export default function Footer() {
   return (
-    <footer className="border-t py-12" style={{ borderColor: '#334155', background: 'rgba(30,41,59,0.3)' }}>
-      <div className="max-w-screen-xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-8 mb-8">
-          <div className="col-span-2">
-            <div className="flex items-center gap-2 mb-4">
-              <div className="w-6 h-6 rounded flex items-center justify-center" style={{ background: '#8B5CF6' }}>
-                <svg className="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
-                </svg>
-              </div>
-              <span className="font-bold text-[#F8FAFC]">AImusicgenerate</span>
+    <footer className="line-warm border-t" style={{ background: 'var(--sp-bg)' }}>
+      <div className="overflow-hidden line-subtle border-b py-3" aria-hidden>
+        <div className="marquee-track flex w-max items-center">
+          {[0, 1].map((copy) => (
+            <div key={copy} className="flex items-center whitespace-nowrap">
+              {GENRES.map((genre, i) => (
+                <span key={genre} className="flex items-center">
+                  <span className="index-no mx-3">{String(i + 1).padStart(2, '0')}</span>
+                  <span
+                    className="font-mono text-xs uppercase"
+                    style={{ color: 'var(--sp-ink-dim)', letterSpacing: '0.14em' }}
+                  >
+                    {genre}
+                  </span>
+                  <span className="mx-6" style={{ color: 'var(--sp-ink-ghost)' }}>~</span>
+                </span>
+              ))}
             </div>
-            <p className="text-[#94A3B8] text-sm max-w-xs">
-              基于先进生成式 AI 技术的音乐创作平台，让每个人都能成为作曲家。
-            </p>
-          </div>
-          <div>
-            <h5 className="font-bold mb-4 text-[#F8FAFC]">产品</h5>
-            <ul className="space-y-2 text-sm text-[#94A3B8]">
-              <li><a href="#" className="hover:text-[#8B5CF6] transition-colors">功能特性</a></li>
-              <li><a href="#" className="hover:text-[#8B5CF6] transition-colors" data-omniflow-feature-status="unbuilt">价格方案</a></li>
-              <li><a href="#" className="hover:text-[#8B5CF6] transition-colors" data-omniflow-feature-status="unbuilt">API 接口</a></li>
-            </ul>
-          </div>
-          <div>
-            <h5 className="font-bold mb-4 text-[#F8FAFC]">支持</h5>
-            <ul className="space-y-2 text-sm text-[#94A3B8]">
-              <li><a href="#" className="hover:text-[#8B5CF6] transition-colors" data-omniflow-feature-status="unbuilt">帮助中心</a></li>
-              <li><a href="#" className="hover:text-[#8B5CF6] transition-colors" data-omniflow-feature-status="unbuilt">社区论坛</a></li>
-              <li><a href="#" className="hover:text-[#8B5CF6] transition-colors" data-omniflow-feature-status="unbuilt">联系我们</a></li>
-            </ul>
-          </div>
+          ))}
         </div>
-        <div className="pt-8 flex flex-col md:flex-row justify-between items-center gap-4 text-xs text-[#94A3B8]" style={{ borderTop: '1px solid #334155' }}>
-          <p>© 2026 AImusicgenerate. All rights reserved.</p>
-          <div className="flex gap-6">
-            <a href="#" className="hover:text-[#F8FAFC] transition-colors" data-omniflow-feature-status="unbuilt">隐私政策</a>
-            <a href="#" className="hover:text-[#F8FAFC] transition-colors" data-omniflow-feature-status="unbuilt">服务条款</a>
+      </div>
+
+      <div className="max-w-screen-xl mx-auto px-4 sm:px-6 lg:px-8 py-10 flex flex-col md:flex-row items-start md:items-end justify-between gap-6">
+        <div>
+          <div className="flex items-center gap-3 mb-3">
+            <div className="w-7 h-7 rounded-md flex items-center justify-center" style={{ background: 'var(--sp-accent)' }}>
+              <svg className="w-4 h-4" fill="none" stroke="#14120E" strokeWidth={2.2} strokeLinecap="round" viewBox="0 0 24 24">
+                <path d="M4 10v4M8 7v10M12 4v16M16 7v10M20 10v4" />
+              </svg>
+            </div>
+            <span className="font-display text-xl leading-none" style={{ color: 'var(--sp-ink)' }}>拾音社</span>
+            <span className="index-no">SoundPick</span>
           </div>
+          <p className="text-sm" style={{ color: 'var(--sp-ink-dim)' }}>拾取灵感，谱成声音。</p>
+        </div>
+        <div className="md:text-right">
+          <p className="text-xs" style={{ color: 'var(--sp-ink-ghost)' }}>AI 生成 · 仅供学习交流</p>
+          <p className="text-xs mt-1" style={{ color: 'var(--sp-ink-ghost)' }}>© 2026 拾音社 SoundPick</p>
         </div>
       </div>
     </footer>

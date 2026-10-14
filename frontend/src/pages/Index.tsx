@@ -1,50 +1,37 @@
-import { useState } from 'react';
-import { Toaster } from '@/components/ui/sonner';
-import { toast } from 'sonner';
+import { useEffect, useState } from 'react';
 import Navbar from '@/components/custom/Navbar';
 import Footer from '@/components/custom/Footer';
 import Home from './Home';
-import History from './History';
-import { MusicTrack } from '@shared/types/api';
-import { useLocalStorage } from '@/hooks/use-localStorage';
+import Library from './Library';
+import Plaza from './Plaza';
 import { useAuth } from '@/contexts/AuthContext';
 
-type View = 'home' | 'history';
+export type View = 'home' | 'library' | 'plaza';
+
+function viewFromHash(): View {
+  const hash = window.location.hash;
+  if (hash.startsWith('#/plaza')) return 'plaza';
+  if (hash.startsWith('#/library')) return 'library';
+  return 'home';
+}
 
 const Index = () => {
-  const { quotaRemaining, incrementQuota, resetAccount, logout } = useAuth();
-  const [view, setView] = useState<View>(() => {
-    const hash = window.location.hash;
-    if (hash === '#/history') return 'history';
-    return 'home';
-  });
-  const [history, setHistory] = useLocalStorage<MusicTrack[]>('ai-music-history', []);
+  const { user, logout } = useAuth();
+  const [view, setView] = useState<View>(viewFromHash);
+
+  // 监听浏览器前进/后退
+  useEffect(() => {
+    const onHashChange = () => setView(viewFromHash());
+    window.addEventListener('hashchange', onHashChange);
+    return () => window.removeEventListener('hashchange', onHashChange);
+  }, []);
 
   const handleNavigation = (path: string) => {
-    if (path === '/history') {
-      setView('history');
-      window.location.hash = '#/history';
-    } else {
-      setView('home');
-      window.location.hash = '#/';
-    }
-  };
-
-  const handleGenerated = (track: MusicTrack) => {
-    setHistory((prev) => [track, ...prev].slice(0, 50));
-    incrementQuota();
-  };
-
-  const handleClearHistory = () => {
-    setHistory([]);
-  };
-
-  const handleReset = () => {
-    if (confirm('确定重置测试账号？将清空生成历史并恢复全部额度。')) {
-      resetAccount();
-      setHistory([]);
-      toast.success('账号已重置，额度已恢复');
-    }
+    const next: View =
+      path === '/plaza' ? 'plaza' : path === '/library' ? 'library' : 'home';
+    setView(next);
+    window.location.hash = `#${path === '/' ? '/' : path}`;
+    window.scrollTo({ top: 0 });
   };
 
   const handleLogout = () => {
@@ -54,27 +41,20 @@ const Index = () => {
   };
 
   return (
-    <div className="min-h-screen flex flex-col" style={{ background: '#0F172A' }}>
+    <div className="min-h-screen flex flex-col grain" style={{ background: 'var(--sp-bg)' }}>
       <Navbar
         onNavigate={handleNavigation}
         currentView={view}
-        username="admin"
-        onReset={handleReset}
+        username={user?.username}
+        quotaRemaining={user?.quotaRemaining}
         onLogout={handleLogout}
       />
       <main className="flex-grow">
-        {view === 'home' ? (
-          <Home
-            history={history}
-            onGenerated={handleGenerated}
-            quotaRemaining={quotaRemaining}
-          />
-        ) : (
-          <History history={history} onClear={handleClearHistory} />
-        )}
+        {view === 'home' && <Home onNavigate={handleNavigation} />}
+        {view === 'library' && <Library onNavigate={handleNavigation} />}
+        {view === 'plaza' && <Plaza onNavigate={handleNavigation} />}
       </main>
       <Footer />
-      <Toaster />
     </div>
   );
 };
