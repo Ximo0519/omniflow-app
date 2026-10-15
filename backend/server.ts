@@ -1,6 +1,8 @@
 import 'dotenv/config';
 import express, { ErrorRequestHandler } from 'express';
 import path from 'path';
+import { sql } from 'drizzle-orm';
+import { db, isDbConfigured } from './db';
 
 // Stripe related import add here
 
@@ -94,6 +96,21 @@ app.get('*', (_req, res) => {
  * Must be the last middleware
  */
 app.use(errorHandler as ErrorRequestHandler);
+
+/**
+ * 启动时执行幂等迁移：把 music.duration 从 integer 改为 real（Suno 返回浮点时长）
+ * integer → real 是安全的加宽转换，已有数据不受影响。重复执行无副作用。
+ */
+async function runMigrations() {
+  if (!isDbConfigured()) return;
+  try {
+    await db.execute(sql`ALTER TABLE IF EXISTS music ALTER COLUMN duration TYPE real`);
+    console.log('[migration] music.duration 已确保为 real 类型');
+  } catch (err) {
+    console.error('[migration] duration 列类型调整失败（可能已为 real）:', err instanceof Error ? err.message : err);
+  }
+}
+void runMigrations();
 
 /**
  * Start Server
