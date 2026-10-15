@@ -92,6 +92,23 @@ function parseTitle(extend: unknown): string {
   return '';
 }
 
+/** 从平台响应中提取任务 ID（兼容数字数组、单个 ID、对象包裹三种形态） */
+function pickTaskId(data: unknown): string | null {
+  const fromValue = (v: unknown): string | null => {
+    if (typeof v === 'number' || typeof v === 'string') return String(v);
+    if (v && typeof v === 'object') {
+      const o = v as Record<string, unknown>;
+      const inner = o.taskId ?? o.task_id ?? o.id;
+      if (typeof inner === 'number' || typeof inner === 'string') {
+        return String(inner);
+      }
+    }
+    return null;
+  };
+  if (Array.isArray(data)) return data.length > 0 ? fromValue(data[0]) : null;
+  return fromValue(data);
+}
+
 /**
  * 提交生成任务，返回首个 taskId
  *
@@ -120,17 +137,26 @@ export async function createGenerationTask(params: {
     });
 
     const payload = resp.data;
-    const data = payload?.data;
-    const first = Array.isArray(data) ? data[0] : data;
-    if (
-      payload?.code === 200 &&
-      (typeof first === 'number' || typeof first === 'string')
-    ) {
-      return String(first);
+    const accepted =
+      payload?.code === 200 || payload?.code === '200' || payload?.success === true;
+
+    const taskId = accepted ? pickTaskId(payload?.data) : null;
+    if (taskId) return taskId;
+
+    // 已受理但未按预期返回任务 ID：带出原始响应便于排查
+    if (accepted) {
+      const raw = JSON.stringify(payload).slice(0, 500);
+      console.error('[suno] 提交已受理但未取到任务 ID:', raw);
+      throw new Error(
+        `生成任务已提交但平台未返回任务 ID，原始响应: ${raw.slice(0, 300)}`
+      );
     }
 
-    // 平台的业务错误（如积分不足、敏感词）
-    throw new Error(pickMessage(payload, '提交生成任务失败'));
+    // 平台的业务错误（如积分不足、敏感词）；带上原始响应便于排查
+    const raw = JSON.stringify(payload).slice(0, 500);
+    throw new Error(
+      `${pickMessage(payload, '提交生成任务失败')}（原始响应: ${raw.slice(0, 300)}）`
+    );
   } catch (err) {
     if (axios.isAxiosError(err)) {
       const msg = err.response?.data
@@ -159,19 +185,19 @@ export async function getTaskResult(taskId: string): Promise<SunoTaskResult> {
     }
 
     const task = payload.data as Record<string, unknown>;
-    const status = normalizeStatus(String(task.status || ''));
+    const status = normalizeStatus(String(task.status ?? ''));
+    // 当前平台把文件信息放在 data.fileInfo；legacy 兼容 data.result.fileInfo 旧结构
+    const legacy = (task.result || {}) as Record<string, unknown>;
+    const info = (task.fileInfo || legacy.fileInfo || {}) as Record<string, unknown>;
 
     const clips: SunoClip[] = [];
-    const result = task.result as Record<string, unknown> | null | undefined;
-    if (status === 'completed' && result) {
-      const info = (result.fileInfo || {}) as Record<string, unknown>;
-      const audioUrl =
-        info.mp3Url || info.mp4Url || result.audio_url || result.proxy_url || '';
+    if (status === 'completed') {
+      const audioUrl = info.mp3Url || info.mp4Url || '';
       if (audioUrl) {
         clips.push({
-          id: String(task.task_id || task.id || taskId),
+          id: String(task.taskId ?? task.task_id ?? task.id ?? taskId),
           audioUrl: String(audioUrl),
-          title: parseTitle(result.extend),
+          title: parseTitle(task.extend ?? legacy.extend),
           duration: Number(info.duration || 0),
         });
       }
@@ -180,10 +206,7 @@ export async function getTaskResult(taskId: string): Promise<SunoTaskResult> {
     return {
       status,
       clips,
-      failReason:
-        status === 'failed'
-          ? String(task.error || '生成失败')
-          : undefined,
+      failReason: status === 'failed' ? String(task.error || '生成失败') : undefined,
     };
   } catch (err) {
     if (axios.isAxiosError(err)) {
