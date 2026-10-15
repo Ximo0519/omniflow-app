@@ -10,6 +10,7 @@ export default function Login() {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
+  const [activationCode, setActivationCode] = useState('');
   const [loading, setLoading] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -26,7 +27,7 @@ export default function Login() {
       }
       setLoading(true);
       try {
-        await register(username.trim(), password);
+        await register(username.trim(), password, activationCode.trim());
         toast.success('注册成功，欢迎加入！');
       } catch (err) {
         toast.error(err instanceof Error ? err.message : '注册失败');
@@ -50,6 +51,7 @@ export default function Login() {
     setMode(m);
     setPassword('');
     setConfirmPassword('');
+    setActivationCode('');
   };
 
   return (
@@ -157,20 +159,37 @@ export default function Login() {
                 />
               </div>
               {mode === 'register' && (
-                <div>
-                  <label className="block index-no mb-2">确认密码 Confirm</label>
-                  <input
-                    type="password"
-                    value={confirmPassword}
-                    onChange={(e) => setConfirmPassword(e.target.value)}
-                    placeholder="再次输入密码"
-                    autoComplete="new-password"
-                    className="w-full rounded-md p-3 text-sm outline-none transition-colors placeholder:text-[var(--sp-ink-ghost)]"
-                    style={{ background: 'var(--sp-bg)', border: '1px solid var(--sp-line)', color: 'var(--sp-ink)' }}
-                    onFocus={(e) => (e.target.style.borderColor = 'var(--sp-accent)')}
-                    onBlur={(e) => (e.target.style.borderColor = 'var(--sp-line)')}
-                  />
-                </div>
+                <>
+                  <div>
+                    <label className="block index-no mb-2">确认密码 Confirm</label>
+                    <input
+                      type="password"
+                      value={confirmPassword}
+                      onChange={(e) => setConfirmPassword(e.target.value)}
+                      placeholder="再次输入密码"
+                      autoComplete="new-password"
+                      className="w-full rounded-md p-3 text-sm outline-none transition-colors placeholder:text-[var(--sp-ink-ghost)]"
+                      style={{ background: 'var(--sp-bg)', border: '1px solid var(--sp-line)', color: 'var(--sp-ink)' }}
+                      onFocus={(e) => (e.target.style.borderColor = 'var(--sp-accent)')}
+                      onBlur={(e) => (e.target.style.borderColor = 'var(--sp-line)')}
+                    />
+                  </div>
+                  <div>
+                    <label className="block index-no mb-2">激活码 Activation Code</label>
+                    <input
+                      type="text"
+                      value={activationCode}
+                      onChange={(e) => setActivationCode(e.target.value)}
+                      placeholder="请输入激活码"
+                      autoComplete="off"
+                      className="w-full rounded-md p-3 text-sm outline-none transition-colors placeholder:text-[var(--sp-ink-ghost)]"
+                      style={{ background: 'var(--sp-bg)', border: '1px solid var(--sp-line)', color: 'var(--sp-ink)' }}
+                      onFocus={(e) => (e.target.style.borderColor = 'var(--sp-accent)')}
+                      onBlur={(e) => (e.target.style.borderColor = 'var(--sp-line)')}
+                    />
+                    <p className="text-xs mt-1.5" style={{ color: 'var(--sp-ink-ghost)' }}>测试期间注册需要激活码</p>
+                  </div>
+                </>
               )}
               <button
                 type="submit"

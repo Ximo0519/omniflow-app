@@ -113,10 +113,11 @@ export interface SharePost {
 // ============ 业务 API ============
 
 export const authApi = {
-  register: (username: string, password: string) =>
+  register: (username: string, password: string, activationCode: string) =>
     api.post<{ token: string; user: User }>('/api/auth/register', {
       username,
       password,
+      activationCode,
     }),
   login: (username: string, password: string) =>
     api.post<{ token: string; user: User }>('/api/auth/login', {

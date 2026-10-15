@@ -14,7 +14,7 @@ interface AuthContextValue {
   isAuthenticated: boolean;
   loading: boolean; // 启动时校验 token 是否加载中
   login: (username: string, password: string) => Promise<void>;
-  register: (username: string, password: string) => Promise<void>;
+  register: (username: string, password: string, activationCode: string) => Promise<void>;
   logout: () => void;
   refreshUser: () => Promise<void>; // 生成音乐后刷新配额
 }
@@ -64,15 +64,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(newUser);
   }, []);
 
-  const register = useCallback(async (username: string, password: string) => {
-    const { token: newToken, user: newUser } = await authApi.register(
-      username,
-      password,
-    );
-    setToken(newToken);
-    setTokenState(newToken);
-    setUser(newUser);
-  }, []);
+  const register = useCallback(
+    async (username: string, password: string, activationCode: string) => {
+      const { token: newToken, user: newUser } = await authApi.register(
+        username,
+        password,
+        activationCode,
+      );
+      setToken(newToken);
+      setTokenState(newToken);
+      setUser(newUser);
+    },
+    [],
+  );
 
   const logout = useCallback(() => {
     setToken(null);

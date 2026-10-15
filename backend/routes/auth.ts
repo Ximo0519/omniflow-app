@@ -6,6 +6,8 @@ import { users } from '../db/schema';
 import { requireAuth, signToken, refreshQuota } from '../middleware/auth';
 
 const DAILY_QUOTA = parseInt(process.env.DAILY_QUOTA || '10', 10);
+/** 注册激活码，留空则开放注册。移除时删除此变量即可。 */
+const ACTIVATION_CODE = process.env.ACTIVATION_CODE || '';
 
 const router = Router();
 
@@ -33,8 +35,9 @@ router.post('/register', async (req: Request, res: Response) => {
 
     const username = String(req.body.username || '').trim();
     const password = String(req.body.password || '');
+    const activationCode = String(req.body.activationCode || '').trim();
 
-    if (!/^[a-zA-Z0-9_\u4e00-\u9fa5]{2,20}$/.test(username)) {
+    if (!/^[a-zA-Z0-9_一-龥]{2,20}$/.test(username)) {
       return res.status(400).json({
         success: false,
         error: '用户名需为 2-20 位中英文、数字或下划线',
@@ -44,6 +47,9 @@ router.post('/register', async (req: Request, res: Response) => {
       return res
         .status(400)
         .json({ success: false, error: '密码长度需为 6-50 位' });
+    }
+    if (ACTIVATION_CODE && activationCode !== ACTIVATION_CODE) {
+      return res.status(403).json({ success: false, error: '激活码无效' });
     }
 
     const existing = await db

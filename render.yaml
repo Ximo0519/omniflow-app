@@ -40,3 +40,6 @@ services:
       # 业务配置
       - key: DAILY_QUOTA
         value: "10"
+      # 注册激活码（测试期用，留空开放注册）
+      - key: ACTIVATION_CODE
+        sync: false
