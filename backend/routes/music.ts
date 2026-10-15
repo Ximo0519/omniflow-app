@@ -188,7 +188,6 @@ router.post('/generate', requireAuth, async (req: Request, res: Response) => {
     // 提交 Suno 任务
     const taskId = await createGenerationTask({
       prompt: sunoPrompt,
-      style: tags,
       title,
       instrumental: instrumental !== false,
     });

@@ -6,11 +6,13 @@ import axios from 'axios';
  * 环境变量：
  * - SUNO_API_KEY      代理平台 API Key（必填）
  * - SUNO_API_BASE_URL 代理平台地址，默认 https://open.suno.cn
- * - SUNO_MODEL        模型版本（可选，留空由平台使用默认模型）
+ * - SUNO_MODEL        模型版本（对应平台 mv 字段），默认 chirp-hawk
+ *                     可选值：chirp-hawk（V6，默认）| chirp-hawk-wild | chirp-goose
  *
  * 接口约定（open.suno.cn）：
  * - 提交生成：POST /api/v1/music/generate  返回 { code, data: [taskId, ...], success, message }
  * - 查询任务：GET  /api/v1/music/task?id=  返回 { code, data: { status, result, error, ... }, success, message }
+ * - 必填字段：mv、title、make_instrumental，以及 gpt_description_prompt 与 prompt 二选一
  *
  * 如更换其他代理平台，只需调整本文件内的请求/响应映射。
  */
@@ -19,7 +21,8 @@ const BASE_URL = (
   process.env.SUNO_API_BASE_URL || 'https://open.suno.cn'
 ).replace(/\/+$/, '');
 const API_KEY = process.env.SUNO_API_KEY || '';
-const MODEL = process.env.SUNO_MODEL || '';
+/** 平台 mv 字段，必填；chirp-hawk 即 V6 模型 */
+const MODEL = process.env.SUNO_MODEL || 'chirp-hawk';
 
 export interface SunoClip {
   id: string;
@@ -95,21 +98,20 @@ function parseTitle(extend: unknown): string {
  * 注意：该平台一次请求会生成多个版本（data 为 taskId 数组），本项目取第一个。
  */
 export async function createGenerationTask(params: {
-  prompt: string; // 音乐描述
-  style: string; // 风格标签，如 "pop, energetic"
+  prompt: string; // 音乐描述（灵感模式）
   title: string;
   instrumental: boolean;
 }): Promise<string> {
   assertConfigured();
 
-  const body: Record<string, unknown> = {
+  // mv / title / make_instrumental 为平台必填字段；
+  // 灵感模式下风格由描述文本推断，故不再单独发送 tags（tags 仅适用自定义模式）
+  const body = {
     gpt_description_prompt: params.prompt,
-    tags: params.style,
-    title: params.title,
+    mv: MODEL,
+    title: params.title || '未命名音乐',
     make_instrumental: params.instrumental,
   };
-  // 仅在显式配置了模型版本时才传递，避免平台因未知取值报错
-  if (MODEL) body.mv = MODEL;
 
   try {
     const resp = await axios.post(`${BASE_URL}/api/v1/music/generate`, body, {
@@ -118,9 +120,13 @@ export async function createGenerationTask(params: {
     });
 
     const payload = resp.data;
-    const ids = payload?.data;
-    if (payload?.code === 200 && Array.isArray(ids) && ids.length > 0) {
-      return String(ids[0]);
+    const data = payload?.data;
+    const first = Array.isArray(data) ? data[0] : data;
+    if (
+      payload?.code === 200 &&
+      (typeof first === 'number' || typeof first === 'string')
+    ) {
+      return String(first);
     }
 
     // 平台的业务错误（如积分不足、敏感词）
