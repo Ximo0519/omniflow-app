@@ -92,7 +92,8 @@ function parseTitle(extend: unknown): string {
   return '';
 }
 
-/** 从平台响应中提取任务 ID（兼容数字数组、单个 ID、对象包裹三种形态） */
+/** 从平台响应中提取任务 ID
+ * 兼容形态：数字数组、单个 ID、对象包裹（taskId/task_id/id/task_ids） */
 function pickTaskId(data: unknown): string | null {
   const fromValue = (v: unknown): string | null => {
     if (typeof v === 'number' || typeof v === 'string') return String(v);
@@ -102,6 +103,9 @@ function pickTaskId(data: unknown): string | null {
       if (typeof inner === 'number' || typeof inner === 'string') {
         return String(inner);
       }
+      // 平台当前返回 data.task_ids: [id, id]
+      const ids = o.task_ids ?? o.taskIds;
+      if (Array.isArray(ids) && ids.length > 0) return fromValue(ids[0]);
     }
     return null;
   };
