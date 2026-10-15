@@ -55,7 +55,11 @@ class AIService {
   private model: string;
 
   constructor() {
-    this.apiKey = process.env.AI_API_KEY || process.env.OMNIFLOW_API_KEY || '';
+    this.apiKey =
+      process.env.AI_API_KEY ||
+      process.env.DEEPSEEK_API_KEY ||
+      process.env.OMNIFLOW_API_KEY ||
+      '';
     this.baseUrl =
       process.env.AI_API_BASE_URL || 'https://api.deepseek.com';
     this.model = process.env.AI_MODEL || DEFAULT_MODEL;
