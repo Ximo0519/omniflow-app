@@ -147,20 +147,14 @@ export async function createGenerationTask(params: {
     const taskId = accepted ? pickTaskId(payload?.data) : null;
     if (taskId) return taskId;
 
-    // 已受理但未按预期返回任务 ID：带出原始响应便于排查
+    // 已受理但未按预期返回任务 ID
     if (accepted) {
-      const raw = JSON.stringify(payload).slice(0, 500);
-      console.error('[suno] 提交已受理但未取到任务 ID:', raw);
-      throw new Error(
-        `生成任务已提交但平台未返回任务 ID，原始响应: ${raw.slice(0, 300)}`
-      );
+      console.error('[suno] 提交已受理但未取到任务 ID:', JSON.stringify(payload).slice(0, 500));
+      throw new Error('生成任务已提交但平台未返回任务 ID');
     }
 
-    // 平台的业务错误（如积分不足、敏感词）；带上原始响应便于排查
-    const raw = JSON.stringify(payload).slice(0, 500);
-    throw new Error(
-      `${pickMessage(payload, '提交生成任务失败')}（原始响应: ${raw.slice(0, 300)}）`
-    );
+    // 平台的业务错误（如积分不足、敏感词）
+    throw new Error(pickMessage(payload, '提交生成任务失败'));
   } catch (err) {
     if (axios.isAxiosError(err)) {
       const msg = err.response?.data
