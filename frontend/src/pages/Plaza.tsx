@@ -14,6 +14,8 @@ export default function Plaza({ onNavigate }: PlazaProps) {
 
   /** 当前展开 MiniPlayer 的帖子 id（单例） */
   const [openPlayerId, setOpenPlayerId] = useState<string | null>(null);
+  /** 当前正在播放的帖子 id（独立于展开状态） */
+  const [playingId, setPlayingId] = useState<string | null>(null);
   const playedIds = useRef<Set<string>>(new Set());
 
   // 提示词分享弹窗
@@ -44,10 +46,26 @@ export default function Plaza({ onNavigate }: PlazaProps) {
   const handleTogglePlay = useCallback(
     (post: SharePost) => {
       if (!post.audioUrl) return;
-      setOpenPlayerId((prev) => (prev === post.id ? null : post.id));
+      if (playingId === post.id) {
+        setPlayingId(null);
+      } else if (openPlayerId === post.id) {
+        setPlayingId(post.id);
+      } else {
+        setOpenPlayerId(post.id);
+        setPlayingId(post.id);
+      }
     },
-    [],
+    [playingId, openPlayerId],
   );
+
+  const handlePlayerEnded = useCallback((postId: string) => {
+    setPlayingId((cur) => (cur === postId ? null : cur));
+  }, []);
+
+  const handleClosePlayer = useCallback(() => {
+    setOpenPlayerId(null);
+    setPlayingId(null);
+  }, []);
 
   /** 首次真正播放时计入播放数（传给 MiniPlayer 的 onFirstPlay） */
   const handleFirstPlay = useCallback(
@@ -177,6 +195,7 @@ export default function Plaza({ onNavigate }: PlazaProps) {
         <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
           {posts.map((post, i) => {
             const isOpen = openPlayerId === post.id;
+            const isPlaying = playingId === post.id;
             return (
               <div
                 key={post.id}
@@ -213,7 +232,7 @@ export default function Plaza({ onNavigate }: PlazaProps) {
                   )}
                 </div>
 
-                {/* 音乐播放区：点击展开 MiniPlayer */}
+                {/* 音乐播放区：外部卡片 = 唯一播放入口 */}
                 {post.audioUrl && (
                   <>
                     <button
@@ -221,13 +240,15 @@ export default function Plaza({ onNavigate }: PlazaProps) {
                       className="surface-2 rounded-md p-3 flex items-center gap-3 text-left transition-colors"
                       style={{ border: `1px solid ${isOpen ? 'var(--sp-accent)' : 'var(--sp-line)'}` }}
                     >
-                      <CoverArt seed={post.title} size={56} pulsing={isOpen} />
+                      <CoverArt seed={post.title} size={56} pulsing={isPlaying} />
                       <div className="min-w-0 flex-grow">
-                        <p className="text-sm text-[var(--sp-ink)] truncate">{isOpen ? '播放器已展开' : '点击播放'}</p>
+                        <p className="text-sm text-[var(--sp-ink)] truncate">
+                          {isPlaying ? '正在播放...' : isOpen ? '已暂停（点击继续）' : '点击播放'}
+                        </p>
                         <p className="text-xs text-[var(--sp-ink-dim)] font-mono mt-0.5">♪ {post.playsCount} 次播放</p>
                       </div>
                       <div className="w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0" style={{ border: '1px solid var(--sp-line)', color: 'var(--sp-ink)' }}>
-                        {isOpen ? (
+                        {isPlaying ? (
                           <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" /></svg>
                         ) : (
                           <svg className="w-3.5 h-3.5 ml-0.5" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z" /></svg>
@@ -237,9 +258,10 @@ export default function Plaza({ onNavigate }: PlazaProps) {
                     <MiniPlayer
                       src={post.audioUrl}
                       open={isOpen}
-                      shouldPlay={isOpen}
-                      onClose={() => setOpenPlayerId(null)}
-                      onFirstPlay={() => handleFirstPlay(post)}
+                      shouldPlay={isPlaying}
+                      onClose={handleClosePlayer}
+                      onEnded={() => handlePlayerEnded(post.id)}
+                      onPlayStarted={() => handleFirstPlay(post)}
                     />
                   </>
                 )}

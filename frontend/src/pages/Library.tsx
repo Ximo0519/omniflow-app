@@ -41,6 +41,8 @@ export default function Library({ onNavigate }: LibraryProps) {
 
   /** 当前展开 MiniPlayer 的条目 id（单例，同时只展开一个） */
   const [openPlayerId, setOpenPlayerId] = useState<string | null>(null);
+  /** 当前正在播放的条目 id（独立于展开状态） */
+  const [playingId, setPlayingId] = useState<string | null>(null);
 
   const [renameTarget, setRenameTarget] = useState<MusicRecord | null>(null);
   const [renameValue, setRenameValue] = useState('');
@@ -74,7 +76,26 @@ export default function Library({ onNavigate }: LibraryProps) {
 
   const handleTogglePlay = useCallback((record: MusicRecord) => {
     if (record.status !== 'completed' || !record.audioUrl) return;
-    setOpenPlayerId((prev) => (prev === record.id ? null : record.id));
+    if (playingId === record.id) {
+      // 正在播 → 暂停（不收起播放器）
+      setPlayingId(null);
+    } else if (openPlayerId === record.id) {
+      // 已展开但暂停 → 继续播放
+      setPlayingId(record.id);
+    } else {
+      // 切换到新条目 → 展开 + 开始播放
+      setOpenPlayerId(record.id);
+      setPlayingId(record.id);
+    }
+  }, [playingId, openPlayerId]);
+
+  const handlePlayerEnded = useCallback((recordId: string) => {
+    setPlayingId((cur) => (cur === recordId ? null : cur));
+  }, []);
+
+  const handleClosePlayer = useCallback(() => {
+    setOpenPlayerId(null);
+    setPlayingId(null);
   }, []);
 
   const handleDownload = useCallback(async (record: MusicRecord) => {
@@ -111,11 +132,12 @@ export default function Library({ onNavigate }: LibraryProps) {
       await musicApi.remove(record.id);
       setList((prev) => prev.filter((m) => m.id !== record.id));
       if (openPlayerId === record.id) setOpenPlayerId(null);
+      if (playingId === record.id) setPlayingId(null);
       toast.success('已删除');
     } catch (err) {
       toast.error(err instanceof Error ? err.message : '删除失败');
     }
-  }, [openPlayerId]);
+  }, [openPlayerId, playingId]);
 
   const handleShare = useCallback(async () => {
     if (!shareTarget) return;
@@ -189,6 +211,7 @@ export default function Library({ onNavigate }: LibraryProps) {
           {filtered.map((record, i) => {
             const badge = STATUS_BADGE[record.status] || STATUS_BADGE.generating;
             const isOpen = openPlayerId === record.id;
+            const isPlaying = playingId === record.id;
             return (
               <div
                 key={record.id}
@@ -198,19 +221,19 @@ export default function Library({ onNavigate }: LibraryProps) {
                 <div className="flex flex-wrap items-center gap-4">
                   {/* 封面 */}
                   <div className="relative flex-shrink-0">
-                    <CoverArt seed={record.title} size={72} pulsing={record.status === 'generating'} />
-                    {isOpen && <PlayingBars />}
+                    <CoverArt seed={record.title} size={72} pulsing={isPlaying} />
+                    {isPlaying && <PlayingBars />}
                   </div>
 
-                  {/* 播放按钮 */}
+                  {/* 播放按钮（唯一播放入口：play/pause 图标随 playingId 切换） */}
                   <button
                     onClick={() => record.status === 'completed' && handleTogglePlay(record)}
                     disabled={record.status !== 'completed'}
                     className="w-11 h-11 rounded-full flex items-center justify-center flex-shrink-0 disabled:opacity-30 transition-colors"
                     style={{ border: '1px solid var(--sp-line)', color: 'var(--sp-ink)' }}
-                    title={isOpen ? '收起播放器' : '播放'}
+                    title={isPlaying ? '暂停' : isOpen ? '继续播放' : '播放'}
                   >
-                    {isOpen ? (
+                    {isPlaying ? (
                       <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" /></svg>
                     ) : (
                       <svg className="w-4 h-4 ml-0.5" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z" /></svg>
@@ -262,13 +285,14 @@ export default function Library({ onNavigate }: LibraryProps) {
                   </div>
                 </div>
 
-                {/* 展开的完整播放器 */}
+                {/* MiniPlayer（无内部播放按钮，外部按钮驱动） */}
                 {record.audioUrl && (
                   <MiniPlayer
                     src={record.audioUrl}
                     open={isOpen}
-                    shouldPlay={isOpen}
-                    onClose={() => setOpenPlayerId(null)}
+                    shouldPlay={isPlaying}
+                    onClose={handleClosePlayer}
+                    onEnded={() => handlePlayerEnded(record.id)}
                   />
                 )}
               </div>

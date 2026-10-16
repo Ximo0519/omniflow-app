@@ -1,39 +1,47 @@
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect, useCallback, forwardRef, useImperativeHandle } from 'react';
 
 interface MiniPlayerProps {
   src: string;
-  /** 是否展开显示（父级控制单例：同时只有一个展开） */
+  /** 是否展开显示 */
   open: boolean;
-  /** 父级设置的"应该在播放"状态（用于切换条目时自动停旧开新） */
+  /** 父级控制的期望播放状态 */
   shouldPlay: boolean;
   /** 关闭收起回调 */
   onClose: () => void;
-  /** 首次播放触发（广场用来计数） */
-  onFirstPlay?: () => void;
+  /** 真正开始播放时触发（广场用来计数） */
+  onPlayStarted?: () => void;
+  /** 播放结束时通知父级 */
+  onEnded?: () => void;
 }
 
 const PLAYBACK_RATES = [0.75, 1, 1.25, 1.5, 2];
 
-export default function MiniPlayer({
-  src,
-  open,
-  shouldPlay,
-  onClose,
-  onFirstPlay,
-}: MiniPlayerProps) {
+export interface MiniPlayerHandle {
+  /** 让外部按钮能读到当前是否在播 */
+  isPlaying: () => boolean;
+}
+
+export default forwardRef<MiniPlayerHandle, MiniPlayerProps>(function MiniPlayer(
+  { src, open, shouldPlay, onClose, onPlayStarted, onEnded },
+  ref,
+) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [internalPlaying, setInternalPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [buffered, setBuffered] = useState(0);
-  const [loading, setLoading] = useState(false);
   const [playbackRate, setPlaybackRate] = useState(1);
   const [volume, setVolume] = useState(0.8);
   const [muted, setMuted] = useState(false);
   const [hoverProgress, setHoverProgress] = useState(false);
   const firstPlayFired = useRef(false);
 
-  // 当 open 或 src 变化时重置
+  // 暴露给父组件：外部按钮可以查状态
+  useImperativeHandle(ref, () => ({
+    isPlaying: () => internalPlaying,
+  }), [internalPlaying]);
+
+  // open 或 src 变化 → 重置
   useEffect(() => {
     if (!audioRef.current) return;
     if (!open) {
@@ -48,24 +56,31 @@ export default function MiniPlayer({
     }
   }, [open, src]);
 
-  // 当 shouldPlay 变为 true 时自动播放（父级切换条目）
+  // shouldPlay 变化 → 控制 audio 播放/暂停
   useEffect(() => {
     if (!open || !audioRef.current) return;
-    if (shouldPlay && !internalPlaying) {
-      const p = audioRef.current.play();
-      if (p && typeof p.then === 'function') {
-        p.then(() => {
-          setInternalPlaying(true);
-          if (!firstPlayFired.current) {
-            firstPlayFired.current = true;
-            onFirstPlay?.();
-          }
-        }).catch(() => {});
+    if (shouldPlay) {
+      if (!internalPlaying) {
+        const p = audioRef.current.play();
+        if (p && typeof p.then === 'function') {
+          p.then(() => {
+            setInternalPlaying(true);
+            if (!firstPlayFired.current) {
+              firstPlayFired.current = true;
+              onPlayStarted?.();
+            }
+          }).catch(() => {
+            // autoplay 被拦截时保持 paused，等用户下次交互
+          });
+        }
       }
-    } else if (!shouldPlay && internalPlaying) {
-      audioRef.current.pause();
+    } else {
+      if (internalPlaying) {
+        audioRef.current.pause();
+        setInternalPlaying(false);
+      }
     }
-  }, [shouldPlay, open, internalPlaying, onFirstPlay]);
+  }, [shouldPlay, open]);
 
   // 同步倍速 / 音量
   useEffect(() => {
@@ -73,28 +88,6 @@ export default function MiniPlayer({
     audioRef.current.playbackRate = playbackRate;
     audioRef.current.volume = muted ? 0 : volume;
   }, [playbackRate, volume, muted]);
-
-  const handleToggle = useCallback(async () => {
-    if (!audioRef.current) return;
-    if (internalPlaying) {
-      audioRef.current.pause();
-      setInternalPlaying(false);
-    } else {
-      setLoading(true);
-      try {
-        await audioRef.current.play();
-        setInternalPlaying(true);
-        if (!firstPlayFired.current) {
-          firstPlayFired.current = true;
-          onFirstPlay?.();
-        }
-      } catch {
-        // 用户没交互时 play() 可能被拒，忽略
-      } finally {
-        setLoading(false);
-      }
-    }
-  }, [internalPlaying, onFirstPlay]);
 
   const handleSeek = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     if (!audioRef.current) return;
@@ -113,7 +106,7 @@ export default function MiniPlayer({
     setPlaybackRate(PLAYBACK_RATES[(idx + 1) % PLAYBACK_RATES.length]);
   }, [playbackRate]);
 
-  // 只有 open 时才渲染完整结构，否则占零高度
+  // 只有 open 时才渲染
   if (!open) return null;
 
   const progress = duration > 0 ? (currentTime / duration) * 100 : 0;
@@ -152,10 +145,8 @@ export default function MiniPlayer({
         onEnded={() => {
           setInternalPlaying(false);
           setCurrentTime(0);
-          onClose();
+          onEnded?.();
         }}
-        onCanPlay={() => setLoading(false)}
-        onWaiting={() => setLoading(true)}
       />
 
       {/* 进度条 */}
@@ -164,7 +155,6 @@ export default function MiniPlayer({
         onMouseEnter={() => setHoverProgress(true)}
         onMouseLeave={() => setHoverProgress(false)}
       >
-        {/* 轨道 */}
         <div
           className="absolute inset-x-0 top-1/2 transition-all duration-150"
           style={{
@@ -173,7 +163,6 @@ export default function MiniPlayer({
             height: hoverProgress ? 4 : 2,
           }}
         />
-        {/* 已缓冲 */}
         <div
           className="absolute left-0 top-1/2 transition-all duration-150"
           style={{
@@ -184,7 +173,6 @@ export default function MiniPlayer({
             height: hoverProgress ? 4 : 2,
           }}
         />
-        {/* 已播放 */}
         <div
           className="absolute left-0 top-1/2 transition-all duration-150"
           style={{
@@ -194,7 +182,6 @@ export default function MiniPlayer({
             height: hoverProgress ? 4 : 2,
           }}
         />
-        {/* 播放头 */}
         <div
           className="absolute rounded-full transition-all duration-150"
           style={{
@@ -225,7 +212,7 @@ export default function MiniPlayer({
         <span>{fmt(duration)}</span>
       </div>
 
-      {/* 控制栏 */}
+      {/* 控制栏：音量 + 快退/快进 + 倍速 + 收起（不再有内部播放/暂停按钮） */}
       <div className="flex items-center gap-2">
         {/* 音量 */}
         <div className="flex items-center gap-1">
@@ -264,7 +251,7 @@ export default function MiniPlayer({
 
         <div className="h-4 w-px" style={{ background: 'var(--sp-line)' }} />
 
-        {/* 后退/前进 5s */}
+        {/* 后退 5s */}
         <button
           onClick={() => skip(-5)}
           className="p-1 rounded-sm transition-colors"
@@ -272,25 +259,6 @@ export default function MiniPlayer({
           title="后退 5 秒"
         >
           <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24"><path d="M11.99 5V1l-5 5 5 5V7c3.31 0 6 2.69 6 6s-2.69 6-6 6-6-2.69-6-6h-2c0 4.42 3.58 8 8 8s8-3.58 8-8-3.58-8-8-8z" /></svg>
-        </button>
-
-        {/* 播放/暂停 */}
-        <button
-          onClick={handleToggle}
-          className="w-8 h-8 rounded-full flex items-center justify-center transition-transform"
-          style={{ background: 'var(--sp-accent)', color: '#14120E' }}
-          title={internalPlaying ? '暂停' : '播放'}
-        >
-          {loading ? (
-            <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
-              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-            </svg>
-          ) : internalPlaying ? (
-            <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" /></svg>
-          ) : (
-            <svg className="w-3.5 h-3.5 ml-0.5" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z" /></svg>
-          )}
         </button>
 
         <button
@@ -331,4 +299,4 @@ export default function MiniPlayer({
       </div>
     </div>
   );
-}
+});
