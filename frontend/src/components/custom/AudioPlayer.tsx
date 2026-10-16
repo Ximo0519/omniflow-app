@@ -7,12 +7,18 @@ interface AudioPlayerProps {
   onDownload?: () => void;
 }
 
+const PLAYBACK_RATES = [0.75, 1, 1.25, 1.5, 2];
+
 export default function AudioPlayer({ track, onDownload }: AudioPlayerProps) {
   const audioRef = useRef<HTMLAudioElement>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [loading, setLoading] = useState(false);
+  const [playbackRate, setPlaybackRate] = useState(1);
+  const [volume, setVolume] = useState(0.8);
+  const [muted, setMuted] = useState(false);
+  const [progressHover, setProgressHover] = useState(false);
 
   useEffect(() => {
     const audio = audioRef.current;
@@ -38,6 +44,14 @@ export default function AudioPlayer({ track, onDownload }: AudioPlayerProps) {
       audio.removeEventListener('waiting', onWaiting);
     };
   }, [track.audioUrl]);
+
+  /** 同步倍速和音量到 audio 元素 */
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    audio.playbackRate = playbackRate;
+    audio.volume = muted ? 0 : volume;
+  }, [playbackRate, volume, muted]);
 
   const togglePlay = async () => {
     const audio = audioRef.current;
@@ -152,20 +166,41 @@ export default function AudioPlayer({ track, onDownload }: AudioPlayerProps) {
             {track.description}
           </p>
 
-          {/* 进度条：1px 细线 + accent 播放头 */}
-          <div className="mb-5">
+          {/* 进度条：hover 加粗 + accent 播放头 */}
+          <div
+            className="mb-5"
+            onMouseEnter={() => setProgressHover(true)}
+            onMouseLeave={() => setProgressHover(false)}
+          >
             <div className="relative h-5 flex items-center">
               <div
-                className="absolute inset-x-0 top-1/2 h-px"
-                style={{ transform: 'translateY(-50%)', background: 'var(--sp-line)' }}
+                className="absolute inset-x-0 top-1/2 transition-all duration-150"
+                style={{
+                  transform: 'translateY(-50%)',
+                  background: 'var(--sp-line)',
+                  height: progressHover ? 4 : 1,
+                }}
               />
               <div
-                className="absolute left-0 top-1/2 h-px"
-                style={{ transform: 'translateY(-50%)', width: `${progress}%`, background: 'var(--sp-accent)' }}
+                className="absolute left-0 top-1/2 transition-all duration-150"
+                style={{
+                  transform: 'translateY(-50%)',
+                  width: `${progress}%`,
+                  background: 'var(--sp-accent)',
+                  height: progressHover ? 4 : 1,
+                }}
               />
               <div
-                className="absolute w-2.5 h-2.5 rounded-full"
-                style={{ left: `${progress}%`, top: '50%', transform: 'translate(-50%,-50%)', background: 'var(--sp-accent)' }}
+                className="absolute rounded-full transition-transform duration-150"
+                style={{
+                  width: progressHover ? 12 : 10,
+                  height: progressHover ? 12 : 10,
+                  left: `${progress}%`,
+                  top: '50%',
+                  transform: `translate(-50%,-50%) scale(${progressHover ? 1.2 : 1})`,
+                  background: 'var(--sp-accent)',
+                  boxShadow: progressHover ? '0 0 0 4px rgba(var(--sp-accent),0.2)' : 'none',
+                }}
               />
               <input
                 type="range"
@@ -184,7 +219,52 @@ export default function AudioPlayer({ track, onDownload }: AudioPlayerProps) {
           </div>
 
           {/* 播放控制 */}
-          <div className="flex items-center justify-center gap-4">
+          <div className="flex items-center justify-center gap-3">
+            {/* 音量 */}
+            <div className="flex items-center gap-1.5 group">
+              <button
+                onClick={() => setMuted(!muted)}
+                className="p-1.5 rounded-sm transition-colors"
+                style={{ color: muted || volume === 0 ? 'var(--sp-ink-ghost)' : 'var(--sp-ink-dim)' }}
+                onMouseEnter={(e) => (e.currentTarget.style.color = 'var(--sp-accent)')}
+                onMouseLeave={(e) => (e.currentTarget.style.color = muted || volume === 0 ? 'var(--sp-ink-ghost)' : 'var(--sp-ink-dim)')}
+                title={muted ? '取消静音' : '静音'}
+              >
+                {muted || volume === 0 ? (
+                  <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+                    <path d="M16.5 12A4.5 4.5 0 0014 8.03v2.21l2.45 2.45c.03-.2.05-.41.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51C20.63 14.91 21 13.5 21 12c0-4.28-2.99-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3L3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06c1.38-.31 2.63-.95 3.69-1.81L19.73 21 21 19.73l-9-9L4.27 3zM12 4L9.91 6.09 12 8.18V4z" />
+                  </svg>
+                ) : volume < 0.5 ? (
+                  <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+                    <path d="M7 9v6h4l5 5V4l-5 5H7z" />
+                  </svg>
+                ) : (
+                  <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+                    <path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3A4.5 4.5 0 0014 8.03v7.94c1.48-.73 2.5-2.25 2.5-4.97zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z" />
+                  </svg>
+                )}
+              </button>
+              <input
+                type="range"
+                min={0}
+                max={1}
+                step={0.01}
+                value={muted ? 0 : volume}
+                onChange={(e) => {
+                  const v = parseFloat(e.target.value);
+                  setVolume(v);
+                  if (v > 0) setMuted(false);
+                }}
+                className="w-16 h-1 appearance-none cursor-pointer rounded-full"
+                style={{
+                  background: `linear-gradient(to right, var(--sp-accent) 0%, var(--sp-accent) ${(muted ? 0 : volume) * 100}%, var(--sp-line) ${(muted ? 0 : volume) * 100}%, var(--sp-line) 100%)`,
+                  accentColor: 'var(--sp-accent)',
+                }}
+                aria-label="音量"
+              />
+            </div>
+
+            {/* 后退 10s */}
             <button
               className="h-9 px-3 rounded-sm flex items-center gap-1.5 transition-colors"
               style={{ border: '1px solid var(--sp-line)', color: 'var(--sp-ink-dim)' }}
@@ -201,6 +281,7 @@ export default function AudioPlayer({ track, onDownload }: AudioPlayerProps) {
               <span className="font-mono text-[10px]">10s</span>
             </button>
 
+            {/* 播放/暂停 */}
             <button
               onClick={togglePlay}
               className="w-14 h-14 rounded-full flex items-center justify-center transition-transform hover:-translate-y-0.5"
@@ -222,6 +303,7 @@ export default function AudioPlayer({ track, onDownload }: AudioPlayerProps) {
               )}
             </button>
 
+            {/* 前进 10s */}
             <button
               className="h-9 px-3 rounded-sm flex items-center gap-1.5 transition-colors"
               style={{ border: '1px solid var(--sp-line)', color: 'var(--sp-ink-dim)' }}
@@ -236,6 +318,25 @@ export default function AudioPlayer({ track, onDownload }: AudioPlayerProps) {
               <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
                 <path d="M16 18h2V6h-2zm-8.5-6L16 6v12z" />
               </svg>
+            </button>
+
+            {/* 倍速 */}
+            <button
+              className="h-9 px-3 rounded-sm flex items-center gap-1 transition-colors font-mono text-xs"
+              style={{
+                border: '1px solid var(--sp-line)',
+                color: playbackRate !== 1 ? 'var(--sp-accent)' : 'var(--sp-ink-dim)',
+              }}
+              onMouseEnter={(e) => (e.currentTarget.style.color = 'var(--sp-accent)')}
+              onMouseLeave={(e) => (e.currentTarget.style.color = playbackRate !== 1 ? 'var(--sp-accent)' : 'var(--sp-ink-dim)')}
+              onClick={() => {
+                const idx = PLAYBACK_RATES.indexOf(playbackRate);
+                const next = PLAYBACK_RATES[(idx + 1) % PLAYBACK_RATES.length];
+                setPlaybackRate(next);
+              }}
+              title="点击切换倍速"
+            >
+              {playbackRate}x
             </button>
           </div>
         </div>
