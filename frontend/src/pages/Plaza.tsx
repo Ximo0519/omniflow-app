@@ -45,20 +45,25 @@ export default function Plaza({ onNavigate }: PlazaProps) {
     (post: SharePost) => {
       if (!post.audioUrl) return;
       setOpenPlayerId((prev) => (prev === post.id ? null : post.id));
-      // 首次播放时计入播放数
-      if (!playedIds.current.has(post.id)) {
-        playedIds.current.add(post.id);
-        plazaApi
-          .play(post.id)
-          .then(() =>
-            setPosts((prev) =>
-              prev.map((p) =>
-                p.id === post.id ? { ...p, playsCount: p.playsCount + 1 } : p,
-              ),
+    },
+    [],
+  );
+
+  /** 首次真正播放时计入播放数（传给 MiniPlayer 的 onFirstPlay） */
+  const handleFirstPlay = useCallback(
+    (post: SharePost) => {
+      if (playedIds.current.has(post.id)) return;
+      playedIds.current.add(post.id);
+      plazaApi
+        .play(post.id)
+        .then(() =>
+          setPosts((prev) =>
+            prev.map((p) =>
+              p.id === post.id ? { ...p, playsCount: p.playsCount + 1 } : p,
             ),
-          )
-          .catch(() => {});
-      }
+          ),
+        )
+        .catch(() => {});
     },
     [],
   );
@@ -234,6 +239,7 @@ export default function Plaza({ onNavigate }: PlazaProps) {
                       open={isOpen}
                       shouldPlay={isOpen}
                       onClose={() => setOpenPlayerId(null)}
+                      onFirstPlay={() => handleFirstPlay(post)}
                     />
                   </>
                 )}

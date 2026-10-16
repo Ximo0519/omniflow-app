@@ -54,12 +54,18 @@ export default function MiniPlayer({
     if (shouldPlay && !internalPlaying) {
       const p = audioRef.current.play();
       if (p && typeof p.then === 'function') {
-        p.catch(() => {});
+        p.then(() => {
+          setInternalPlaying(true);
+          if (!firstPlayFired.current) {
+            firstPlayFired.current = true;
+            onFirstPlay?.();
+          }
+        }).catch(() => {});
       }
     } else if (!shouldPlay && internalPlaying) {
       audioRef.current.pause();
     }
-  }, [shouldPlay, open, internalPlaying]);
+  }, [shouldPlay, open, internalPlaying, onFirstPlay]);
 
   // 同步倍速 / 音量
   useEffect(() => {
