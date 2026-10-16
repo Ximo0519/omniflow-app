@@ -2,6 +2,7 @@ import { useState, useCallback, useEffect, useRef } from 'react';
 import { toast } from 'sonner';
 import { plazaApi, type SharePost } from '@/lib/api';
 import CoverArt from '@/components/custom/CoverArt';
+import MiniPlayer from '@/components/custom/MiniPlayer';
 
 interface PlazaProps {
   onNavigate?: (path: string) => void;
@@ -11,8 +12,8 @@ export default function Plaza({ onNavigate }: PlazaProps) {
   const [posts, setPosts] = useState<SharePost[]>([]);
   const [loading, setLoading] = useState(true);
 
-  const [playingId, setPlayingId] = useState<string | null>(null);
-  const audioRef = useRef<HTMLAudioElement | null>(null);
+  /** 当前展开 MiniPlayer 的帖子 id（单例） */
+  const [openPlayerId, setOpenPlayerId] = useState<string | null>(null);
   const playedIds = useRef<Set<string>>(new Set());
 
   // 提示词分享弹窗
@@ -40,35 +41,26 @@ export default function Plaza({ onNavigate }: PlazaProps) {
     load();
   }, [load]);
 
-  const handlePlay = useCallback(
+  const handleTogglePlay = useCallback(
     (post: SharePost) => {
       if (!post.audioUrl) return;
-      if (playingId === post.id) {
-        audioRef.current?.pause();
-        setPlayingId(null);
-        return;
-      }
-      if (audioRef.current) {
-        audioRef.current.src = post.audioUrl;
-        audioRef.current.play().catch(() => toast.error('播放失败'));
-        setPlayingId(post.id);
-        // 首次播放时计入播放数
-        if (!playedIds.current.has(post.id)) {
-          playedIds.current.add(post.id);
-          plazaApi
-            .play(post.id)
-            .then(() =>
-              setPosts((prev) =>
-                prev.map((p) =>
-                  p.id === post.id ? { ...p, playsCount: p.playsCount + 1 } : p,
-                ),
+      setOpenPlayerId((prev) => (prev === post.id ? null : post.id));
+      // 首次播放时计入播放数
+      if (!playedIds.current.has(post.id)) {
+        playedIds.current.add(post.id);
+        plazaApi
+          .play(post.id)
+          .then(() =>
+            setPosts((prev) =>
+              prev.map((p) =>
+                p.id === post.id ? { ...p, playsCount: p.playsCount + 1 } : p,
               ),
-            )
-            .catch(() => {});
-        }
+            ),
+          )
+          .catch(() => {});
       }
     },
-    [playingId],
+    [],
   );
 
   const handleLike = useCallback(async (post: SharePost) => {
@@ -164,8 +156,6 @@ export default function Plaza({ onNavigate }: PlazaProps) {
         </div>
       </div>
 
-      <audio ref={audioRef} onEnded={() => setPlayingId(null)} />
-
       {loading ? (
         <div className="py-24 flex justify-center">
           <div className="w-8 h-8 border-2 border-[var(--sp-line)] border-t-[var(--sp-accent)] rounded-full animate-spin" />
@@ -181,12 +171,12 @@ export default function Plaza({ onNavigate }: PlazaProps) {
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
           {posts.map((post, i) => {
-            const isPlaying = playingId === post.id;
+            const isOpen = openPlayerId === post.id;
             return (
               <div
                 key={post.id}
                 className="reveal-up rounded-md p-5 flex flex-col gap-4 transition-colors"
-                style={{ background: 'var(--sp-surface)', border: '1px solid var(--sp-line)', ['--stagger' as any]: i }}
+                style={{ background: 'var(--sp-surface)', border: `1px solid ${isOpen ? 'var(--sp-accent)' : 'var(--sp-line)'}`, ['--stagger' as any]: i }}
               >
                 {/* 作者行 */}
                 <div className="flex items-center gap-3">
@@ -218,26 +208,34 @@ export default function Plaza({ onNavigate }: PlazaProps) {
                   )}
                 </div>
 
-                {/* 音乐卡片：播放条 */}
+                {/* 音乐播放区：点击展开 MiniPlayer */}
                 {post.audioUrl && (
-                  <button
-                    onClick={() => handlePlay(post)}
-                    className="surface-2 rounded-md p-3 flex items-center gap-3 text-left transition-colors"
-                    style={{ border: `1px solid ${isPlaying ? 'var(--sp-accent)' : 'var(--sp-line)'}` }}
-                  >
-                    <CoverArt seed={post.title} size={56} pulsing={isPlaying} />
-                    <div className="min-w-0 flex-grow">
-                      <p className="text-sm text-[var(--sp-ink)] truncate">{isPlaying ? '正在播放...' : '点击播放'}</p>
-                      <p className="text-xs text-[var(--sp-ink-dim)] font-mono mt-0.5">♪ {post.playsCount} 次播放</p>
-                    </div>
-                    <div className="w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0" style={{ border: '1px solid var(--sp-line)', color: 'var(--sp-ink)' }}>
-                      {isPlaying ? (
-                        <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" /></svg>
-                      ) : (
-                        <svg className="w-3.5 h-3.5 ml-0.5" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z" /></svg>
-                      )}
-                    </div>
-                  </button>
+                  <>
+                    <button
+                      onClick={() => handleTogglePlay(post)}
+                      className="surface-2 rounded-md p-3 flex items-center gap-3 text-left transition-colors"
+                      style={{ border: `1px solid ${isOpen ? 'var(--sp-accent)' : 'var(--sp-line)'}` }}
+                    >
+                      <CoverArt seed={post.title} size={56} pulsing={isOpen} />
+                      <div className="min-w-0 flex-grow">
+                        <p className="text-sm text-[var(--sp-ink)] truncate">{isOpen ? '播放器已展开' : '点击播放'}</p>
+                        <p className="text-xs text-[var(--sp-ink-dim)] font-mono mt-0.5">♪ {post.playsCount} 次播放</p>
+                      </div>
+                      <div className="w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0" style={{ border: '1px solid var(--sp-line)', color: 'var(--sp-ink)' }}>
+                        {isOpen ? (
+                          <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" /></svg>
+                        ) : (
+                          <svg className="w-3.5 h-3.5 ml-0.5" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z" /></svg>
+                        )}
+                      </div>
+                    </button>
+                    <MiniPlayer
+                      src={post.audioUrl}
+                      open={isOpen}
+                      shouldPlay={isOpen}
+                      onClose={() => setOpenPlayerId(null)}
+                    />
+                  </>
                 )}
 
                 {/* 提示词折叠展示 */}

@@ -1,7 +1,8 @@
-import { useState, useCallback, useEffect, useRef } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { toast } from 'sonner';
 import { musicApi, plazaApi, type MusicRecord } from '@/lib/api';
 import CoverArt from '@/components/custom/CoverArt';
+import MiniPlayer from '@/components/custom/MiniPlayer';
 
 type Filter = 'all' | 'generating' | 'completed' | 'failed';
 
@@ -38,8 +39,8 @@ export default function Library({ onNavigate }: LibraryProps) {
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<Filter>('all');
 
-  const [playingId, setPlayingId] = useState<string | null>(null);
-  const audioRef = useRef<HTMLAudioElement | null>(null);
+  /** 当前展开 MiniPlayer 的条目 id（单例，同时只展开一个） */
+  const [openPlayerId, setOpenPlayerId] = useState<string | null>(null);
 
   const [renameTarget, setRenameTarget] = useState<MusicRecord | null>(null);
   const [renameValue, setRenameValue] = useState('');
@@ -71,18 +72,10 @@ export default function Library({ onNavigate }: LibraryProps) {
     return () => clearInterval(timer);
   }, [list, load]);
 
-  const handlePlay = useCallback((record: MusicRecord) => {
-    if (playingId === record.id) {
-      audioRef.current?.pause();
-      setPlayingId(null);
-      return;
-    }
-    if (audioRef.current) {
-      audioRef.current.src = record.audioUrl || '';
-      audioRef.current.play().catch(() => toast.error('播放失败'));
-      setPlayingId(record.id);
-    }
-  }, [playingId]);
+  const handleTogglePlay = useCallback((record: MusicRecord) => {
+    if (record.status !== 'completed' || !record.audioUrl) return;
+    setOpenPlayerId((prev) => (prev === record.id ? null : record.id));
+  }, []);
 
   const handleDownload = useCallback(async (record: MusicRecord) => {
     try {
@@ -117,12 +110,12 @@ export default function Library({ onNavigate }: LibraryProps) {
     try {
       await musicApi.remove(record.id);
       setList((prev) => prev.filter((m) => m.id !== record.id));
-      if (playingId === record.id) setPlayingId(null);
+      if (openPlayerId === record.id) setOpenPlayerId(null);
       toast.success('已删除');
     } catch (err) {
       toast.error(err instanceof Error ? err.message : '删除失败');
     }
-  }, [playingId]);
+  }, [openPlayerId]);
 
   const handleShare = useCallback(async () => {
     if (!shareTarget) return;
@@ -193,79 +186,91 @@ export default function Library({ onNavigate }: LibraryProps) {
         </div>
       ) : (
         <div className="space-y-3">
-          <audio ref={audioRef} onEnded={() => setPlayingId(null)} />
           {filtered.map((record, i) => {
             const badge = STATUS_BADGE[record.status] || STATUS_BADGE.generating;
-            const isPlaying = playingId === record.id;
+            const isOpen = openPlayerId === record.id;
             return (
               <div
                 key={record.id}
-                className="reveal-up rounded-md p-4 md:p-5 flex flex-wrap items-center gap-4 transition-colors"
-                style={{ background: 'var(--sp-surface)', border: `1px solid ${isPlaying ? 'var(--sp-accent)' : 'var(--sp-line)'}`, ['--stagger' as any]: i }}
+                className="reveal-up rounded-md p-4 md:p-5 transition-colors"
+                style={{ background: 'var(--sp-surface)', border: `1px solid ${isOpen ? 'var(--sp-accent)' : 'var(--sp-line)'}`, ['--stagger' as any]: i }}
               >
-                {/* 封面 */}
-                <div className="relative flex-shrink-0">
-                  <CoverArt seed={record.title} size={72} pulsing={record.status === 'generating'} />
-                  {isPlaying && <PlayingBars />}
-                </div>
-
-                {/* 播放按钮 */}
-                <button
-                  onClick={() => record.status === 'completed' && handlePlay(record)}
-                  disabled={record.status !== 'completed'}
-                  className="w-11 h-11 rounded-full flex items-center justify-center flex-shrink-0 disabled:opacity-30 transition-colors"
-                  style={{ border: '1px solid var(--sp-line)', color: 'var(--sp-ink)' }}
-                >
-                  {isPlaying ? (
-                    <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" /></svg>
-                  ) : (
-                    <svg className="w-4 h-4 ml-0.5" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z" /></svg>
-                  )}
-                </button>
-
-                {/* 信息 */}
-                <div className="flex-grow min-w-0">
-                  <div className="flex items-center gap-3 flex-wrap">
-                    <p className="font-display text-[var(--sp-ink)] truncate">{record.title}</p>
-                    <span
-                      className="px-2 py-0.5 rounded-md text-xs font-mono"
-                      style={{ border: `1px solid ${badge.color}`, color: badge.color }}
-                    >
-                      {badge.text}
-                    </span>
+                <div className="flex flex-wrap items-center gap-4">
+                  {/* 封面 */}
+                  <div className="relative flex-shrink-0">
+                    <CoverArt seed={record.title} size={72} pulsing={record.status === 'generating'} />
+                    {isOpen && <PlayingBars />}
                   </div>
-                  <p className="text-xs text-[var(--sp-ink-dim)] mt-1 truncate">
-                    {record.status === 'failed'
-                      ? `失败原因：${record.failReason || '未知'}`
-                      : `${record.prompt} · ${new Date(record.createdAt).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}`}
-                  </p>
+
+                  {/* 播放按钮 */}
+                  <button
+                    onClick={() => record.status === 'completed' && handleTogglePlay(record)}
+                    disabled={record.status !== 'completed'}
+                    className="w-11 h-11 rounded-full flex items-center justify-center flex-shrink-0 disabled:opacity-30 transition-colors"
+                    style={{ border: '1px solid var(--sp-line)', color: 'var(--sp-ink)' }}
+                    title={isOpen ? '收起播放器' : '播放'}
+                  >
+                    {isOpen ? (
+                      <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" /></svg>
+                    ) : (
+                      <svg className="w-4 h-4 ml-0.5" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z" /></svg>
+                    )}
+                  </button>
+
+                  {/* 信息 */}
+                  <div className="flex-grow min-w-0">
+                    <div className="flex items-center gap-3 flex-wrap">
+                      <p className="font-display text-[var(--sp-ink)] truncate">{record.title}</p>
+                      <span
+                        className="px-2 py-0.5 rounded-md text-xs font-mono"
+                        style={{ border: `1px solid ${badge.color}`, color: badge.color }}
+                      >
+                        {badge.text}
+                      </span>
+                    </div>
+                    <p className="text-xs text-[var(--sp-ink-dim)] mt-1 truncate">
+                      {record.status === 'failed'
+                        ? `失败原因：${record.failReason || '未知'}`
+                        : `${record.prompt} · ${new Date(record.createdAt).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}`}
+                    </p>
+                  </div>
+
+                  {/* 操作 */}
+                  <div className="flex items-center gap-1 flex-shrink-0">
+                    {record.status === 'completed' && (
+                      <>
+                        <IconButton title="下载" onClick={() => handleDownload(record)}>
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a2 2 0 002 2h12a2 2 0 002-2v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                        </IconButton>
+                        <IconButton title="分享到广场" onClick={() => setShareTarget(record)}>
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.367 2.684 3 3 0 00-5.367-2.684z" />
+                        </IconButton>
+                      </>
+                    )}
+                    <IconButton
+                      title="重命名"
+                      onClick={() => {
+                        setRenameTarget(record);
+                        setRenameValue(record.title);
+                      }}
+                    >
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                    </IconButton>
+                    <IconButton title="删除" danger onClick={() => handleDelete(record)}>
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                    </IconButton>
+                  </div>
                 </div>
 
-                {/* 操作 */}
-                <div className="flex items-center gap-1 flex-shrink-0">
-                  {record.status === 'completed' && (
-                    <>
-                      <IconButton title="下载" onClick={() => handleDownload(record)}>
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a2 2 0 002 2h12a2 2 0 002-2v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-                      </IconButton>
-                      <IconButton title="分享到广场" onClick={() => setShareTarget(record)}>
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.367 2.684 3 3 0 00-5.367-2.684z" />
-                      </IconButton>
-                    </>
-                  )}
-                  <IconButton
-                    title="重命名"
-                    onClick={() => {
-                      setRenameTarget(record);
-                      setRenameValue(record.title);
-                    }}
-                  >
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-                  </IconButton>
-                  <IconButton title="删除" danger onClick={() => handleDelete(record)}>
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                  </IconButton>
-                </div>
+                {/* 展开的完整播放器 */}
+                {record.audioUrl && (
+                  <MiniPlayer
+                    src={record.audioUrl}
+                    open={isOpen}
+                    shouldPlay={isOpen}
+                    onClose={() => setOpenPlayerId(null)}
+                  />
+                )}
               </div>
             );
           })}
