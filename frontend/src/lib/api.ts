@@ -92,6 +92,7 @@ export interface MusicRecord {
   status: 'generating' | 'completed' | 'failed';
   failReason?: string | null;
   audioUrl?: string | null;
+  generationGroup?: string | null;
   createdAt: string;
 }
 
@@ -134,10 +135,14 @@ export const musicApi = {
     mood?: string;
     instrumental?: boolean;
   }) =>
-    api.post<{ music: MusicRecord; quotaRemaining: number }>(
-      '/api/music/generate',
-      payload,
-    ),
+    api.post<{
+      groupId: string;
+      versions: MusicRecord[];
+      quotaRemaining: number;
+      polishFailed: boolean;
+    }>('/api/music/generate', payload),
+  groupQuery: (groupId: string) =>
+    api.get<MusicRecord[]>(`/api/music/group/${groupId}`),
   list: () =>
     isDevPreview()
       ? Promise.resolve([...MOCK_MUSIC])

@@ -1,5 +1,6 @@
 import { Router, Request, Response } from 'express';
-import { eq, and, desc } from 'drizzle-orm';
+import { eq, and, desc, sql } from 'drizzle-orm';
+import { randomUUID } from 'crypto';
 import { db, isDbConfigured } from '../db';
 import { music, users } from '../db/schema';
 import { requireAuth } from '../middleware/auth';
@@ -49,77 +50,138 @@ Respond ONLY with JSON: {"title":"...","sunoPrompt":"...","tags":"..."}`;
 }
 
 /**
- * 后台生成任务：提交 Suno → 轮询 → 下载音频 → 转存 R2 → 更新数据库
- * 进程内异步执行，不阻塞请求
+ * 后台双版本生成：各自轮询 → 下载音频 → 转存 R2 → 更新数据库
+ * 两个版本并行轮询（同一个 async 函数里串行处理两个 taskId）
+ *
+ * @param recordIds  两条 music 记录的数据库 id
+ * @param userId     操作用户 id（用于 R2 存储路径 + 失败退配额）
+ * @param quotaCost  本次生成消耗的配额（失败时退回）
  */
-async function runGeneration(musicId: number, userId: number) {
-  const fail = async (reason: string) => {
-    console.error(`[music:${musicId}] 生成失败: ${reason}`);
-    await db
-      .update(music)
-      .set({ status: 'failed', failReason: reason.slice(0, 500) })
-      .where(eq(music.id, musicId));
-  };
+async function runGenerationDual(
+  recordIds: [number, number],
+  userId: number,
+  quotaCost: number,
+) {
+  const MAX_POLLS = 60; // 每 6 秒一次，最多 6 分钟
+  let anySuccess = false;
+  let anyFailed = false;
 
-  try {
-    const rows = await db.select().from(music).where(eq(music.id, musicId)).limit(1);
-    const record = rows[0];
-    if (!record || !record.sunoTaskId) {
-      return fail('记录或任务 ID 不存在');
-    }
-
-    // 轮询：每 6 秒一次，最多 6 分钟
-    const MAX_POLLS = 60;
-    let clip = null;
-    for (let i = 0; i < MAX_POLLS; i++) {
-      await new Promise((r) => setTimeout(r, 6000));
-
-      const result = await getTaskResult(record.sunoTaskId);
-      if (result.status === 'completed' && result.clips.length > 0) {
-        clip = result.clips[0];
-        break;
+  // 两条记录各自处理
+  for (const recordId of recordIds) {
+    try {
+      const rows = await db.select().from(music).where(eq(music.id, recordId)).limit(1);
+      const record = rows[0];
+      if (!record || !record.sunoTaskId) {
+        console.error(`[music:${recordId}] 记录或 taskId 不存在`);
+        anyFailed = true;
+        continue;
       }
-      if (result.status === 'failed') {
-        return fail(result.failReason || 'Suno 生成失败');
-      }
-    }
-    if (!clip?.audioUrl) {
-      return fail('生成超时，请稍后重试');
-    }
 
-    // 无 R2 配置时直接使用代理平台的临时 URL（有时效，仅演示用）
-    if (!isR2Configured()) {
-      console.warn('[music] R2 未配置，直接使用 Suno 临时音频 URL');
+      let clip: Awaited<ReturnType<typeof getTaskResult>>['clips'][0] | null = null;
+      let finalStatus: 'completed' | 'failed' | 'generating' = 'generating';
+      let failReason = '';
+
+      for (let i = 0; i < MAX_POLLS; i++) {
+        await new Promise((r) => setTimeout(r, 6000));
+
+        const result = await getTaskResult(record.sunoTaskId);
+
+        if (result.status === 'completed' && result.clips.length > 0) {
+          clip = result.clips[0];
+          finalStatus = 'completed';
+          break;
+        }
+        if (result.status === 'failed') {
+          finalStatus = 'failed';
+          failReason = result.failReason || 'Suno 生成失败';
+          break;
+        }
+      }
+
+      if (finalStatus === 'generating') {
+        // 超时
+        finalStatus = 'failed';
+        failReason = '生成超时（6 分钟），请稍后重试';
+      }
+
+      if (finalStatus === 'failed') {
+        anyFailed = true;
+        await db
+          .update(music)
+          .set({ status: 'failed', failReason: failReason.slice(0, 500) })
+          .where(eq(music.id, recordId));
+        console.error(`[music:${recordId}] 失败: ${failReason}`);
+        continue;
+      }
+
+      // completed
+      if (!clip?.audioUrl) {
+        anyFailed = true;
+        await db
+          .update(music)
+          .set({ status: 'failed', failReason: '完成但未获取到音频地址' })
+          .where(eq(music.id, recordId));
+        continue;
+      }
+
+      // 无 R2 配置时直接用临时 URL
+      if (!isR2Configured()) {
+        await db
+          .update(music)
+          .set({
+            status: 'completed',
+            audioUrl: clip.audioUrl,
+            sunoId: clip.sunoId || null,
+            duration: clip.duration || null,
+            completedAt: new Date(),
+          })
+          .where(eq(music.id, recordId));
+        anySuccess = true;
+        console.warn(`[music:${recordId}] R2 未配置，使用 Suno 临时 URL`);
+        continue;
+      }
+
+      // 下载 + 转存 R2
+      const buffer = await downloadAudio(clip.audioUrl);
+      const { key, publicUrl } = await uploadAudio(userId, buffer);
+
       await db
         .update(music)
         .set({
           status: 'completed',
-          audioUrl: clip.audioUrl,
+          audioUrl: publicUrl,
+          r2Key: key,
+          sunoId: clip.sunoId || null,
           duration: clip.duration || null,
           completedAt: new Date(),
         })
-        .where(eq(music.id, musicId));
-      return;
+        .where(eq(music.id, recordId));
+
+      anySuccess = true;
+      console.log(`[music:${recordId}] 完成 → ${publicUrl}`);
+    } catch (err) {
+      anyFailed = true;
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(`[music:${recordId}] 处理异常:`, msg);
+      await db
+        .update(music)
+        .set({ status: 'failed', failReason: msg.slice(0, 500) })
+        .where(eq(music.id, recordId));
     }
+  }
 
-    // 下载并转存 R2
-    const buffer = await downloadAudio(clip.audioUrl);
-    const { key, publicUrl } = await uploadAudio(userId, buffer);
-
-    await db
-      .update(music)
-      .set({
-        status: 'completed',
-        audioUrl: publicUrl,
-        r2Key: key,
-        duration: clip.duration || null,
-        completedAt: new Date(),
-      })
-      .where(eq(music.id, musicId));
-
-    console.log(`[music:${musicId}] 生成完成 → ${publicUrl}`);
-  } catch (err) {
-    await fail(err instanceof Error ? err.message : String(err));
+  // 两条都失败 → 退配额
+  // 有一条成功 → 不退回（用户至少拿到了可用结果）
+  if (!anySuccess && anyFailed) {
+    console.warn(`[music:group ${recordIds.join(',')}] 双版本均失败，退还配额 -${quotaCost} → +${quotaCost}`);
+    try {
+      await db
+        .update(users)
+        .set({ quotaRemaining: sql`${users.quotaRemaining} + ${quotaCost}` })
+        .where(eq(users.id, userId));
+    } catch (err) {
+      console.error('[music] 退配额失败:', err);
+    }
   }
 }
 
@@ -138,22 +200,24 @@ function toClient(r: typeof music.$inferSelect) {
     status: r.status,
     failReason: r.failReason,
     audioUrl: r.audioUrl,
+    generationGroup: r.generationGroup,
     createdAt: r.createdAt,
   };
 }
 
 // ============ 路由 ============
 
-/** 发起生成：扣配额 → DeepSeek 润色 → 提交 Suno → 返回记录（前端轮询状态） */
+/** 发起生成：扣配额 → DeepSeek 润色 → 提交 Suno（两个 task_id）→ 插两条记录 → 返回 generationGroup */
 router.post('/generate', requireAuth, async (req: Request, res: Response) => {
   try {
     if (!isDbConfigured()) {
       return res.status(503).json({ success: false, error: '数据库未配置' });
     }
     if (!isSunoConfigured()) {
-      return res
-        .status(503)
-        .json({ success: false, error: '音乐生成服务未配置（SUNO_API_KEY）' });
+      return res.status(503).json({
+        success: false,
+        error: '音乐生成服务未配置（SUNO_API_KEY）',
+      });
     }
 
     const { prompt, style, mood, instrumental } = req.body;
@@ -168,10 +232,11 @@ router.post('/generate', requireAuth, async (req: Request, res: Response) => {
         .json({ success: false, error: '今日生成次数已用完，明天再来吧' });
     }
 
-    // DeepSeek 润色（约 3-8 秒，同步等待，可让标题立即展示）
+    // DeepSeek 润色
     let title = '未命名音乐';
     let sunoPrompt = String(prompt).trim();
     let tags = String(style || '');
+    let polishFailed = false;
     try {
       const optimized = await optimizePrompt(
         String(prompt).trim(),
@@ -182,54 +247,91 @@ router.post('/generate', requireAuth, async (req: Request, res: Response) => {
       sunoPrompt = optimized.sunoPrompt;
       tags = optimized.tags;
     } catch (err) {
+      polishFailed = true;
       console.warn('[music] DeepSeek 润色失败，使用原始描述:', err);
     }
 
-    // 提交 Suno 任务
-    const taskId = await createGenerationTask({
+    // 提交 Suno → 两个 task_id
+    const { taskIds } = await createGenerationTask({
       prompt: sunoPrompt,
       title,
       instrumental: instrumental !== false,
     });
 
-    // 建记录（先扣配额再提交，防并发超用）
+    // 扣配额 + 生成分组 UUID
+    const quotaCost = 1;
     await db
       .update(users)
-      .set({ quotaRemaining: user.quotaRemaining - 1 })
+      .set({ quotaRemaining: user.quotaRemaining - quotaCost })
       .where(eq(users.id, user.id));
 
-    const inserted = await db
+    const groupId = randomUUID();
+
+    // 插入两条 music 记录（共享 generationGroup）
+    const baseValues = {
+      userId: user.id,
+      title,
+      description: String(prompt).trim(),
+      prompt: String(prompt).trim(),
+      optimizedPrompt: sunoPrompt,
+      tags,
+      mood: String(mood || ''),
+      instrumental: instrumental === false ? 0 : 1,
+      status: 'generating' as const,
+      generationGroup: groupId,
+    };
+
+    const [v1, v2] = await db
       .insert(music)
-      .values({
-        userId: user.id,
-        title,
-        description: String(prompt).trim(),
-        prompt: String(prompt).trim(),
-        optimizedPrompt: sunoPrompt,
-        tags,
-        mood: String(mood || ''),
-        instrumental: instrumental === false ? 0 : 1,
-        status: 'generating',
-        sunoTaskId: taskId,
-      })
+      .values([
+        { ...baseValues, sunoTaskId: taskIds[0] },
+        { ...baseValues, sunoTaskId: taskIds[1] },
+      ])
       .returning();
 
-    const record = inserted[0];
-
-    // 启动后台任务（不 await）
-    void runGeneration(record.id, user.id);
+    // 启动后台任务
+    void runGenerationDual([v1.id, v2.id], user.id, quotaCost);
 
     return res.json({
       success: true,
       data: {
-        music: toClient(record),
-        quotaRemaining: user.quotaRemaining - 1,
+        groupId,
+        versions: [toClient(v1), toClient(v2)],
+        quotaRemaining: user.quotaRemaining - quotaCost,
+        polishFailed,
       },
     });
   } catch (err) {
     console.error('[music] generate error:', err);
     const msg = err instanceof Error ? err.message : '发起生成失败';
     return res.status(500).json({ success: false, error: msg });
+  }
+});
+
+/** 按 generationGroup 批量查询（前端轮询用） */
+router.get('/group/:groupId', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const groupId = String(req.params.groupId).trim();
+    if (!groupId) {
+      return res.status(400).json({ success: false, error: '请提供 groupId' });
+    }
+    const rows = await db
+      .select()
+      .from(music)
+      .where(
+        and(
+          eq(music.generationGroup, groupId as any),
+          eq(music.userId, req.authUser!.id),
+        ),
+      )
+      .orderBy(music.id);
+    if (rows.length === 0) {
+      return res.status(404).json({ success: false, error: '该分组不存在' });
+    }
+    return res.json({ success: true, data: rows.map(toClient) });
+  } catch (err) {
+    console.error('[music] group query error:', err);
+    return res.status(500).json({ success: false, error: '查询分组失败' });
   }
 });
 

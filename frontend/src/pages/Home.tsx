@@ -61,6 +61,7 @@ export default function Home({ onNavigate }: HomeProps) {
   const toTrack = useCallback((r: {
     id: string; title: string; description: string; audioUrl?: string | null;
     tags: string; mood: string; prompt: string; createdAt: string;
+    duration?: number | null;
   }): MusicTrack => ({
     id: r.id,
     title: r.title,
@@ -68,7 +69,7 @@ export default function Home({ onNavigate }: HomeProps) {
     audioUrl: r.audioUrl || '',
     style: r.tags || '',
     mood: r.mood,
-    duration: 0,
+    duration: r.duration ?? 0,
     prompt: r.prompt,
     createdAt: r.createdAt,
   }), []);
@@ -95,7 +96,7 @@ export default function Home({ onNavigate }: HomeProps) {
     };
   }, [loadRecent]);
 
-  /** 轮询生成状态直到完成/失败 */
+  /** 轮询单条记录状态直到完成/失败 */
   const pollStatus = useCallback((musicId: string) => {
     const startedAt = Date.now();
     if (pollTimer.current) clearInterval(pollTimer.current);
@@ -115,7 +116,7 @@ export default function Home({ onNavigate }: HomeProps) {
           if (pollTimer.current) clearInterval(pollTimer.current);
           setGenerating(false);
           setProgress(0);
-          refreshUser(); // 失败也会占用配额，刷新展示
+          refreshUser();
           toast.error(record.failReason || '生成失败，请调整描述后重试');
         } else if (Date.now() - startedAt > POLL_TIMEOUT) {
           if (pollTimer.current) clearInterval(pollTimer.current);
@@ -152,16 +153,20 @@ export default function Home({ onNavigate }: HomeProps) {
     setTimeout(() => setPhase('Suno 谱曲中，请耐心等待...'), 6000);
 
     try {
-      const { music: record } = await musicApi.generate({
+      const { versions, polishFailed } = await musicApi.generate({
         prompt: prompt.trim(),
         style: selectedStyle,
         mood,
         instrumental: !withVocal,
       });
+      if (polishFailed) {
+        toast.warning('AI 润色未生效（参数可能较简单），将使用原始描述生成');
+      }
       setProgress((prev) => Math.max(prev, 20));
-      setPhase('已提交生成任务...');
+      setPhase('已提交生成任务，Suno 正在谱曲...');
       refreshUser();
-      pollStatus(record.id);
+      // 两条版本并行生成，轮询第一条即可（任何一条完成都会在音乐库可见）
+      pollStatus(versions[0].id);
     } catch (err) {
       clearInterval(progressTimer);
       setGenerating(false);
