@@ -98,16 +98,25 @@ app.get('*', (_req, res) => {
 app.use(errorHandler as ErrorRequestHandler);
 
 /**
- * 启动时执行幂等迁移：把 music.duration 从 integer 改为 real（Suno 返回浮点时长）
- * integer → real 是安全的加宽转换，已有数据不受影响。重复执行无副作用。
+ * 启动时执行幂等迁移：
+ * 1. music.duration: integer → real（Suno 返回浮点时长）
+ * 2. music 新增 generation_group（uuid，双版本分组）
+ * 3. music 新增 suno_id（varchar(100)，平台 custom_id）
+ * 全部幂等，重复执行无副作用。
  */
 async function runMigrations() {
   if (!isDbConfigured()) return;
   try {
     await db.execute(sql`ALTER TABLE IF EXISTS music ALTER COLUMN duration TYPE real`);
     console.log('[migration] music.duration 已确保为 real 类型');
+
+    await db.execute(sql`ALTER TABLE IF EXISTS music ADD COLUMN IF NOT EXISTS generation_group uuid`);
+    console.log('[migration] music.generation_group 已确保存在');
+
+    await db.execute(sql`ALTER TABLE IF EXISTS music ADD COLUMN IF NOT EXISTS suno_id varchar(100)`);
+    console.log('[migration] music.suno_id 已确保存在');
   } catch (err) {
-    console.error('[migration] duration 列类型调整失败（可能已为 real）:', err instanceof Error ? err.message : err);
+    console.error('[migration] 迁移失败:', err instanceof Error ? err.message : err);
   }
 }
 void runMigrations();

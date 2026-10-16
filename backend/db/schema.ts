@@ -5,6 +5,7 @@ import {
   text,
   integer,
   real,
+  uuid,
   timestamp,
   uniqueIndex,
   index,
@@ -54,6 +55,10 @@ export const music = pgTable(
     status: varchar('status', { length: 20 }).notNull().default('generating'),
     failReason: text('fail_reason'),
     sunoTaskId: varchar('suno_task_id', { length: 100 }),
+    /** 同一次生成的分组 UUID（两条版本共享），用于双版本聚合展示 */
+    generationGroup: uuid('generation_group'),
+    /** Suno custom_id（UUID），后续延长/翻唱/裁剪/变速等 API 的调用凭据 */
+    sunoId: varchar('suno_id', { length: 100 }),
     audioUrl: text('audio_url'),
     r2Key: text('r2_key'),
     createdAt: timestamp('created_at', { withTimezone: true })
